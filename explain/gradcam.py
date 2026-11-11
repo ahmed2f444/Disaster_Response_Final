@@ -22,7 +22,12 @@ from PIL import Image
 ROOT_DIR = Path(__file__).resolve().parent.parent
 DEFAULT_EXPORT_DIR = ROOT_DIR / "data" / "exports"
 DEFAULT_UPLOADS_DIR = ROOT_DIR / "data" / "uploads"
-DEFAULT_SAMPLE_POST = ROOT_DIR / "static" / "samples" / "test_fixture_T1_post_disaster.png"
+_REAL_SAMPLE_POST = ROOT_DIR / "static" / "samples" / "hurricane-matthew_00000030_post_disaster.png"
+DEFAULT_SAMPLE_POST = (
+    _REAL_SAMPLE_POST
+    if _REAL_SAMPLE_POST.is_file()
+    else (ROOT_DIR / "static" / "samples" / "test_fixture_T1_post_disaster.png")
+)
 HOUSTON_EAST_BOUNDS: tuple[float, float, float, float] = (-95.202, 29.768, -95.078, 29.858)
 
 

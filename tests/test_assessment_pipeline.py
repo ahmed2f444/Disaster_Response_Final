@@ -323,6 +323,95 @@ class TestPhase3AssessmentIntegration(unittest.TestCase):
                 self.assertEqual(routes_4[0]["eta_seconds"], eta_3)
                 self.assertEqual(routes_4[0]["shap_values"], shap_3)
 
+    def test_geojson_budget_prioritizes_live_assessed_buildings(self) -> None:
+        import main
+
+        baseline = [
+            {
+                "type": "Feature",
+                "geometry": {"type": "Polygon", "coordinates": [[[-95.15, 29.81], [-95.149, 29.81], [-95.149, 29.811], [-95.15, 29.811], [-95.15, 29.81]]]},
+                "properties": {"building_id": f"BLD-{i:04d}", "damage_class": "minor", "class_label": "minor", "confidence": 0.9, "max_prob": 0.9, "status_flag": "CALIBRATED", "data_source": "xBD_houston_east"},
+            }
+            for i in range(1, 260)
+        ]
+        ring = [[-95.14 + 0.0001 * k, 29.81 + 0.0001 * (k % 3)] for k in range(12)]
+        ring.append(ring[0])
+        assessed = [
+            {
+                "type": "Feature",
+                "geometry": {"type": "Polygon", "coordinates": [ring]},
+                "properties": {"building_id": f"BLD-P1-TEST-{i:03d}", "damage_class": "minor", "class_label": "minor", "confidence": 0.45, "max_prob": 0.45, "status_flag": "LOW_CONFIDENCE", "data_source": "resnet18_unet_pretrained"},
+            }
+            for i in range(1, 81)
+        ]
+        bounded_b, _ = main._enforce_geojson_budget(baseline + assessed, [])
+        payload_bytes = len(json.dumps({"buildings_geojson": {"type": "FeatureCollection", "features": bounded_b}, "roads_geojson": {"type": "FeatureCollection", "features": []}}, separators=(",", ":")).encode("utf-8"))
+        self.assertLess(payload_bytes, main.MAX_GEOJSON_BYTES)
+        kept_ids = {f["properties"]["building_id"] for f in bounded_b}
+        for feat in assessed:
+            self.assertIn(feat["properties"]["building_id"], kept_ids)
+
+    def test_real_world_hurricane_matthew_images_produce_distinct_leaflet_polygons(self) -> None:
+        import damage.assess as assess_mod
+        import db
+        import main
+        import seed
+
+        t0 = ROOT_DIR / "test images" / "hurricane-matthew_00000030_pre_disaster.png"
+        t1 = ROOT_DIR / "test images" / "hurricane-matthew_00000030_post_disaster.png"
+        self.assertTrue(t0.is_file() and t1.is_file(), "Real-world Hurricane Matthew images missing in test images/")
+
+        sample_t0 = ROOT_DIR / "static" / "samples" / "hurricane-matthew_00000030_pre_disaster.png"
+        sample_t1 = ROOT_DIR / "static" / "samples" / "hurricane-matthew_00000030_post_disaster.png"
+        self.assertTrue(sample_t0.is_file() and sample_t1.is_file(), "Real-world sample tiles missing in static/samples/")
+        js = (ROOT_DIR / "static" / "app.js").read_text(encoding="utf-8")
+        self.assertIn("hurricane-matthew_00000030_pre_disaster.png", js)
+        self.assertIn("hurricane-matthew_00000030_post_disaster.png", js)
+
+        pre_uri = "data:image/png;base64," + base64.b64encode(t0.read_bytes()).decode("ascii")
+        post_uri = "data:image/png;base64," + base64.b64encode(t1.read_bytes()).decode("ascii")
+        fix_t0 = ROOT_DIR / "test images" / "test_fixture_T0_pre_disaster.png"
+        fix_t1 = ROOT_DIR / "test images" / "test_fixture_T1_post_disaster.png"
+        fix_pre = "data:image/png;base64," + base64.b64encode(fix_t0.read_bytes()).decode("ascii")
+        fix_post = "data:image/png;base64," + base64.b64encode(fix_t1.read_bytes()).decode("ascii")
+
+        with tempfile.TemporaryDirectory() as td:
+            db_file = str(Path(td) / "real_world_hm.db")
+            export_tmp = Path(td) / "exports"
+            seed.seed_sector(db_path=db_file, num_buildings=220)
+            client = TestClient(main.app)
+
+            with mock.patch.object(assess_mod, "DEFAULT_EXPORT_DIR", export_tmp):
+                r_fix = client.post(
+                    f"/api/assessment/upload?db_path={db_file}",
+                    json={"pre_disaster_image": fix_pre, "post_disaster_image": fix_post, "sector_id": "houston-east"},
+                )
+                self.assertEqual(r_fix.status_code, 200, r_fix.text)
+
+                r_hm = client.post(
+                    f"/api/assessment/upload?db_path={db_file}",
+                    json={"pre_disaster_image": pre_uri, "post_disaster_image": post_uri, "sector_id": "houston-east"},
+                )
+            self.assertEqual(r_hm.status_code, 200, r_hm.text)
+            self.assertEqual(r_hm.json()["status"], "completed")
+
+            assessed = [b for b in db.get_buildings(db_path=db_file) if b["data_source"] == "resnet18_unet_pretrained"]
+            self.assertGreaterEqual(len(assessed), 20)
+            # Stale fixture detections must be replaced when a new real-world pair is assessed
+            self.assertFalse(any(b["building_id"].startswith("BLD-P1-DCE84E37-") for b in assessed))
+            for b in assessed:
+                coords = b["geometry"]["coordinates"][0]
+                lons = [p[0] for p in coords]
+                lats = [p[1] for p in coords]
+                self.assertLess((max(lons) - min(lons)) * (max(lats) - min(lats)), 0.5 * (0.124 * 0.090))
+
+            r_state = client.get(f"/api/state?db_path={db_file}")
+            self.assertEqual(r_state.status_code, 200)
+            st = r_state.json()
+            state_blds = st["buildings_geojson"]["features"]
+            live_features = [f for f in state_blds if f["properties"].get("data_source") == "resnet18_unet_pretrained"]
+            self.assertEqual(len(live_features), len(assessed))
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -1865,19 +1865,21 @@ async function loadDatasetSampleTiles() {
   if (btn) btn.disabled = true;
   if (label) label.textContent = "LOADING DATASET PAIR...";
   const apiBase = getApiBase();
+  const preName = "hurricane-matthew_00000030_pre_disaster.png";
+  const postName = "hurricane-matthew_00000030_post_disaster.png";
   try {
     const [preRes, postRes] = await Promise.all([
-      fetch(`${apiBase}/static/samples/test_fixture_T0_pre_disaster.png`),
-      fetch(`${apiBase}/static/samples/test_fixture_T1_post_disaster.png`),
+      fetch(`${apiBase}/static/samples/${preName}`),
+      fetch(`${apiBase}/static/samples/${postName}`),
     ]);
     if (!preRes.ok || !postRes.ok) {
       throw new Error("Dataset sample tiles unavailable under /static/samples/");
     }
     const [preBlob, postBlob] = await Promise.all([preRes.blob(), postRes.blob()]);
-    applySelectedTileFile("pre", new File([preBlob], "test_fixture_T0_pre_disaster.png", { type: "image/png" }));
-    applySelectedTileFile("post", new File([postBlob], "test_fixture_T1_post_disaster.png", { type: "image/png" }));
+    applySelectedTileFile("pre", new File([preBlob], preName, { type: "image/png" }));
+    applySelectedTileFile("post", new File([postBlob], postName, { type: "image/png" }));
     await Promise.all([pendingTileReads.pre, pendingTileReads.post].filter(Boolean));
-    showToast("Loaded Houston-East dataset sample pair (T0 + T1). Ready to trigger assessment.", false);
+    showToast("Loaded real-world xBD sample pair (hurricane-matthew_00000030 T0 + T1). Ready to trigger assessment.", false);
   } catch (err) {
     showToast("Dataset sample load failed: " + err.message, true);
   } finally {

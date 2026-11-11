@@ -196,6 +196,7 @@ def extract_building_masks(
     fg_threshold: float = 0.35,
     min_area_px: int = 24,
     max_buildings: int = 120,
+    max_area_fraction: float = 0.45,
 ) -> list[dict[str, Any]]:
     """Extract connected building footprint masks and pixel polygons from `(5, H, W)` probabilities."""
     if probs.ndim != 3 or probs.shape[0] < 5:
@@ -248,8 +249,13 @@ def extract_building_masks(
         comp_runs.setdefault(root, []).append(seg)
         comp_areas[root] = comp_areas.get(root, 0) + (seg[2] - seg[1])
 
+    max_area_px = (
+        int(max_area_fraction * h * w)
+        if (0.0 < max_area_fraction < 1.0 and (h * w) >= 64)
+        else (h * w + 1)
+    )
     sorted_roots = sorted(
-        (root for root, area in comp_areas.items() if area >= min_area_px),
+        (root for root, area in comp_areas.items() if min_area_px <= area <= max_area_px),
         key=lambda r: comp_areas[r],
         reverse=True,
     )[:max_buildings]

@@ -74,12 +74,15 @@ def compute_pixel_metrics(
 
             all_confs.append(conf_v)
             all_correct.append((pred_v == true_v).astype(np.float32))
-            for c in range(1, NUM_CLASSES):
+            for c in range(NUM_CLASSES):
                 p_c = pred_v == c
                 t_c = true_v == c
                 tp[c] += int(np.sum(p_c & t_c))
                 fp[c] += int(np.sum(p_c & (~t_c)))
                 fn[c] += int(np.sum((~p_c) & t_c))
+
+    bg_denom = (2 * tp[0]) + fp[0] + fn[0]
+    background_f1 = round(float((2 * tp[0]) / bg_denom), 4) if bg_denom > 0 else None
 
     per_class_f1: dict[str, float] = {}
     present_f1s: list[float] = []
@@ -107,6 +110,7 @@ def compute_pixel_metrics(
         "per_class_f1": per_class_f1,
         "macro_f1": macro_f1,
         "destroyed_f1": per_class_f1["destroyed"],
+        "background_f1": background_f1,
         "ece": round(float(ece), 4),
         "tile_latency_ms": round(float(np.mean(latencies_ms)), 3),
     }
@@ -143,7 +147,12 @@ def evaluate_safety_gate(
             cand_vals = [_finite_or_none(v) or 0.0 for v in cand_f1_map.values()]
             base_macro = float(np.mean(base_vals))
             cand_macro = float(np.mean(cand_vals))
-            c1_ok = (cand_dest >= base_dest) and (cand_macro >= base_macro)
+            base_bg = _finite_or_none(baseline_metrics.get("background_f1"))
+            cand_bg = _finite_or_none(candidate_metrics.get("background_f1"))
+            bg_ok = True
+            if base_bg is not None and cand_bg is not None:
+                bg_ok = cand_bg >= max(0.50, base_bg - 0.10)
+            c1_ok = (cand_dest >= base_dest) and (cand_macro >= base_macro) and bg_ok
             c1 = {
                 "passed": c1_ok,
                 "baseline_macro_f1": round(base_macro, 4),
@@ -151,6 +160,9 @@ def evaluate_safety_gate(
                 "baseline_destroyed_f1": round(base_dest, 4),
                 "candidate_destroyed_f1": round(cand_dest, 4),
             }
+            if base_bg is not None and cand_bg is not None:
+                c1["baseline_background_f1"] = round(base_bg, 4)
+                c1["candidate_background_f1"] = round(cand_bg, 4)
 
     # Check 2: Old-disaster forgetting tolerance (<= 2 F1 points)
     base_old = _finite_or_none(baseline_metrics.get("old_disaster_macro_f1"))

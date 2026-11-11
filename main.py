@@ -295,9 +295,13 @@ def _enforce_geojson_budget(
     edge_features: list[dict[str, Any]],
 ) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
     """Enforce Unified System Document Section 4.5 (< 100 KB and < 10,000 features)."""
+    prioritized_buildings = sorted(
+        building_features,
+        key=lambda f: 0 if (f.get("properties") or {}).get("data_source") == "resnet18_unet_pretrained" else 1,
+    )
     bounded_edges = list(edge_features[: MAX_GEOJSON_FEATURES - 1])
     max_buildings = max(0, (MAX_GEOJSON_FEATURES - 1) - len(bounded_edges))
-    bounded_buildings = list(building_features[:max_buildings])
+    bounded_buildings = list(prioritized_buildings[:max_buildings])
 
     def _byte_size(b_feats: list[dict[str, Any]], e_feats: list[dict[str, Any]]) -> int:
         payload = {
@@ -316,7 +320,7 @@ def _enforce_geojson_budget(
             "geometry": feat["geometry"],
             "properties": {
                 k: feat["properties"][k]
-                for k in ("building_id", "damage_class", "class_label", "confidence", "max_prob", "status_flag")
+                for k in ("building_id", "damage_class", "class_label", "confidence", "max_prob", "status_flag", "data_source")
                 if k in feat["properties"]
             },
         }

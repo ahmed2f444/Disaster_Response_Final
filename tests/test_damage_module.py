@@ -122,6 +122,15 @@ class TestDamageModelAndPreprocessing(unittest.TestCase):
             self.assertTrue(min_lon <= cent_lon <= max_lon)
             self.assertTrue(min_lat <= cent_lat <= max_lat)
 
+    def test_extract_building_masks_skips_degenerate_full_tile_blob(self) -> None:
+        from damage.dataset import extract_building_masks
+
+        probs = np.zeros((5, 128, 128), dtype=np.float32)
+        probs[4, :, :] = 0.90  # Collapsed background covering 100% of tile
+        probs[0, :, :] = 0.10
+        components = extract_building_masks(probs, fg_threshold=0.35, min_area_px=24)
+        self.assertEqual(components, [])
+
     def test_gradcam_export_wgs84_regions_and_embedding_save(self) -> None:
         from damage.dataset import HOUSTON_EAST_BOUNDS
         from damage.exports import (

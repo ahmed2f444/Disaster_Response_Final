@@ -26,7 +26,7 @@ from shapely.geometry import Polygon
 from torch import nn
 
 from damage.assess import _wgs84_to_pixel_coords
-from damage.dataset import HOUSTON_EAST_BOUNDS, prepare_paired_input, rasterize
+from damage.dataset import HOUSTON_EAST_BOUNDS, pad_to_multiple, prepare_paired_input, rasterize, unpad_spatial
 from damage.model import (
     DEFAULT_WEIGHTS_PATH,
     IGNORE_INDEX,
@@ -103,9 +103,22 @@ def compute_inverse_class_weights(targets: Sequence[torch.Tensor]) -> torch.Tens
             weights[cls_idx] = float(np.clip(raw, 0.25, 8.0))
         else:
             weights[cls_idx] = 1.0
-    # Boost severe damage classes slightly relative to background
+    # Keep background anchored and boost severe damage classes relative to background
+    weights[0] = max(weights[0], 0.5)
     weights[4] = max(weights[4], 2.0)
     return torch.from_numpy(weights)
+
+
+def _anchor_background_pixels(
+    target_mask: torch.Tensor,
+    base_probs: torch.Tensor,
+    min_bg_prob: float = 0.60,
+) -> torch.Tensor:
+    """Supervise confident base-model background pixels outside labeled polygons as class 0."""
+    anchored = target_mask.clone()
+    bg_confident = (anchored == IGNORE_INDEX) & (base_probs.argmax(dim=0) == 0) & (base_probs[0] >= min_bg_prob)
+    anchored[bg_confident] = 0
+    return anchored
 
 
 def _safe_token(raw: str) -> str:
@@ -410,12 +423,21 @@ def run_feedback_driven_tier_a(
 
     ckpt = Path(weights_path) if weights_path is not None else DEFAULT_WEIGHTS_PATH
     base_net, device = load_damage_model(weights_path=ckpt, use_cache=False)
-    base_fb_metrics = compute_pixel_metrics(base_net, [(x_full, y_all_fb)], device=device)
+    with torch.no_grad():
+        xb_pad, _ = pad_to_multiple(x_full.unsqueeze(0).to(device), multiple=32)
+        base_probs_pad = torch.softmax(base_net(xb_pad).float(), dim=1)[0].cpu()
+        base_probs = torch.from_numpy(unpad_spatial(base_probs_pad.numpy(), orig_h, orig_w))
+
+    y_train_bg = _anchor_background_pixels(y_train, base_probs)
+    y_old_bg = _anchor_background_pixels(y_old, base_probs)
+    y_all_bg = _anchor_background_pixels(y_all_fb, base_probs)
+
+    base_fb_metrics = compute_pixel_metrics(base_net, [(x_full, y_all_bg)], device=device)
     base_hold_metrics = compute_pixel_metrics(base_net, [(x_full, y_hold)], device=device)
-    base_old_metrics = compute_pixel_metrics(base_net, [(x_full, y_old)], device=device)
+    base_old_metrics = compute_pixel_metrics(base_net, [(x_full, y_old_bg)], device=device)
 
     train_res = run_tier_a_adaptation(
-        samples=[(x_full, y_train), (x_full, y_old)],
+        samples=[(x_full, y_train_bg), (x_full, y_old_bg)],
         disaster_id=disaster_id,
         adapter_version=adapter_version,
         adapter_root=adapter_root,
@@ -430,18 +452,20 @@ def run_feedback_driven_tier_a(
         adapter_path=train_res["adapter_path"],
         use_cache=False,
     )
-    cand_fb_metrics = compute_pixel_metrics(adapted_net, [(x_full, y_all_fb)], device=cand_device)
+    cand_fb_metrics = compute_pixel_metrics(adapted_net, [(x_full, y_all_bg)], device=cand_device)
     cand_hold_metrics = compute_pixel_metrics(adapted_net, [(x_full, y_hold)], device=cand_device)
-    cand_old_metrics = compute_pixel_metrics(adapted_net, [(x_full, y_old)], device=cand_device)
+    cand_old_metrics = compute_pixel_metrics(adapted_net, [(x_full, y_old_bg)], device=cand_device)
 
     gate_report = evaluate_safety_gate(
         baseline_metrics={
             "per_class_f1": base_fb_metrics["per_class_f1"],
+            "background_f1": base_fb_metrics.get("background_f1"),
             "old_disaster_macro_f1": base_old_metrics["macro_f1"],
             "ece": base_fb_metrics["ece"],
         },
         candidate_metrics={
             "per_class_f1": cand_fb_metrics["per_class_f1"],
+            "background_f1": cand_fb_metrics.get("background_f1"),
             "old_disaster_macro_f1": cand_old_metrics["macro_f1"],
             "geographic_holdout_f1": cand_hold_metrics["macro_f1"],
             "geographic_holdout_baseline_f1": base_hold_metrics["macro_f1"],

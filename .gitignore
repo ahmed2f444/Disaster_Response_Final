@@ -32,6 +32,7 @@ data/osm/*
 !data/osm/houston_east_graph.graphml
 data/exports/*
 !data/exports/.gitkeep
+data/uploads/
 data/models/*
 !data/models/.gitkeep
 !data/models/routing_ppo.zip

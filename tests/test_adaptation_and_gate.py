@@ -471,6 +471,71 @@ class TestTask4AdaptationAndSafetyGate(unittest.TestCase):
                 if isinstance(node, ast.Constant) and isinstance(node.value, str):
                     self.assertIsNone(sql_re.search(node.value), f"Raw SQL in {fname}")
 
+    def test_safety_gate_rejects_background_collapse_and_tier_a_preserves_bg(self) -> None:
+        import db
+        import seed
+        from damage.dataset import prepare_paired_tensor
+        from damage.model import DEFAULT_WEIGHTS_PATH, load_damage_model
+        from feedback import adapt, gate
+
+        base = {
+            "per_class_f1": {"no_damage": 0.80, "minor": 0.65, "major": 0.60, "destroyed": 0.55},
+            "background_f1": 0.92,
+            "old_disaster_macro_f1": 0.72,
+            "ece": 0.06,
+        }
+        collapsed = {
+            "per_class_f1": {"no_damage": 0.82, "minor": 0.68, "major": 0.62, "destroyed": 0.60},
+            "background_f1": 0.02,
+            "old_disaster_macro_f1": 0.72,
+            "geographic_holdout_f1": 0.70,
+            "geographic_holdout_baseline_f1": 0.64,
+            "ece": 0.06,
+            "tile_latency_ms": 95.0,
+        }
+        report = gate.evaluate_safety_gate(base, collapsed)
+        self.assertFalse(report["passed"])
+        self.assertFalse(report["checks"]["per_class_f1"]["passed"])
+
+        with tempfile.TemporaryDirectory() as td:
+            db_file = str(Path(td) / "bg_preserve.db")
+            seed.seed_sector(db_path=db_file, num_buildings=10)
+            for idx, cls_name in ((1, "destroyed"), (2, "major"), (3, "minor"), (4, "no_damage")):
+                db.update_building_label(f"BLD-000{idx}", cls_name, db_path=db_file)
+                db.log_feedback(
+                    {
+                        "target_id": f"BLD-000{idx}",
+                        "prediction": "no_damage",
+                        "uncertainty": 0.5,
+                        "responder_action": "correct",
+                        "corrected_label": cls_name,
+                        "responder_id": "QA_BG",
+                    },
+                    db_path=db_file,
+                )
+            res = adapt.run_feedback_driven_tier_a(
+                disaster_id="HOUSTON_HARVEY_2017",
+                epochs=4,
+                learning_rate=0.02,
+                promote=False,
+                db_path=db_file,
+                adapter_root=Path(td) / "adapters",
+                weights_path=DEFAULT_WEIGHTS_PATH,
+                data_dir=Path(td) / "no_uploads",
+            )
+            t0 = ROOT_DIR / "test images" / "test_fixture_T0_pre_disaster.png"
+            t1 = ROOT_DIR / "test images" / "test_fixture_T1_post_disaster.png"
+            x_t, _ = prepare_paired_tensor(t0, t1, multiple=32)
+            net, dev = load_damage_model(
+                weights_path=DEFAULT_WEIGHTS_PATH,
+                adapter_path=res["training_summary"]["adapter_path"],
+                use_cache=False,
+            )
+            with torch.no_grad():
+                probs = torch.softmax(net(x_t.to(dev)), dim=1)[0].cpu().numpy()
+            bg_fraction = float((probs.argmax(axis=0) == 0).mean())
+            self.assertGreater(bg_fraction, 0.5, f"Adapter collapsed background to {bg_fraction:.3f}")
+
 
 if __name__ == "__main__":
     unittest.main()

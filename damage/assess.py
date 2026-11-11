@@ -20,6 +20,8 @@ from shapely.geometry import Polygon
 
 from db import (
     DEFAULT_DB_PATH,
+    clear_stale_assessed_buildings,
+    clear_stale_satellite_incidents,
     get_active_model_version,
     get_buildings,
     get_feedback_logs,
@@ -326,6 +328,16 @@ def run_vision_assessment(
             _save_active_imagery_snapshot(pair, snap_dir, active_bounds, sector_id, pair_digest)
 
             now_utc = datetime.now(timezone.utc).isoformat()
+            if not footprints:
+                clear_stale_assessed_buildings(
+                    current_prefix=f"BLD-P1-{pair_digest}-",
+                    exclude_ids=set(responder_corrected.keys()),
+                    db_path=db_path,
+                )
+                clear_stale_satellite_incidents(
+                    current_prefix=f"INC-SAT-{pair_digest}-",
+                    db_path=db_path,
+                )
             assessed_count = 0
             low_conf_count = 0
 
