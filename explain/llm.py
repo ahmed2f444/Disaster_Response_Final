@@ -30,6 +30,7 @@ ROOT_DIR = Path(__file__).resolve().parent.parent
 DEFAULT_LLM_MODEL_PATH = ROOT_DIR / "data" / "models" / "mistral-7b.gguf"
 
 _LLM_LOCK = threading.Lock()
+_LLM_CALL_LOCK = threading.Lock()
 _LLM_INSTANCE: Any = None
 _LLM_LOAD_FAILED = False
 
@@ -153,7 +154,8 @@ def build_building_prompt(
 
 
 def _invoke_llm(llm: Any, prompt: str, max_tokens: int = 140) -> str:
-    output = llm(prompt, max_tokens=max_tokens, temperature=0.1, stop=["[/INST]"])
+    with _LLM_CALL_LOCK:
+        output = llm(prompt, max_tokens=max_tokens, temperature=0.1, stop=["[/INST]"])
     if isinstance(output, dict):
         choices = output.get("choices") or []
         if choices and isinstance(choices[0], dict):

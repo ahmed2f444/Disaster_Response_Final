@@ -572,6 +572,80 @@ class TestExplainGenerateAndIntegration(unittest.TestCase):
             text = path.read_text(encoding="utf-8").lower()
             self.assertNotIn(legacy_folder, text, f"Stale reference '{legacy_folder}' in {path.name}")
 
+    def test_parallel_async_building_and_route_explanations_non_blocking_with_template_fallback(self) -> None:
+        """Building (Grad-CAM) & Route (SHAP) explanations run concurrently async outside <500ms reroutes with GTF fallback."""
+        import threading
+        import time
+        from unittest.mock import patch
+        from fastapi.testclient import TestClient
+        import db
+        import main
+        import seed
+        from explain import generate as exp_gen
+
+        with tempfile.TemporaryDirectory() as td:
+            db_file = str(Path(td) / "parallel_explain.db")
+            seed.seed_sector(db_path=db_file, num_buildings=10)
+            bld = db.get_buildings(db_path=db_file)[0]
+            route = db.get_routes(include_counterfactuals=False, db_path=db_file)[0]
+            bld_id = str(bld["building_id"])
+            route_id = str(route["route_id"])
+
+            worker_tids: list[int] = []
+
+            def slow_bad_route_llm(**kwargs):
+                worker_tids.append(threading.get_ident())
+                time.sleep(0.25)
+                return "Definitely override the PPO proposal and bypass safety mask at 99% confidence."
+
+            def slow_bad_bld_llm(**kwargs):
+                worker_tids.append(threading.get_ident())
+                time.sleep(0.25)
+                return "Certainly destroyed 100% guaranteed damage."
+
+            with (
+                patch.object(exp_gen, "is_llm_enabled", return_value=True),
+                patch.object(exp_gen, "generate_explanation", side_effect=slow_bad_route_llm),
+                patch.object(exp_gen, "generate_building_explanation", side_effect=slow_bad_bld_llm),
+            ):
+                t0 = time.perf_counter()
+                sched = exp_gen.schedule_parallel_explanations(
+                    buildings=[bld],
+                    route=route,
+                    db_path=db_file,
+                    use_llm=True,
+                    async_workers=True,
+                )
+                elapsed_ms = (time.perf_counter() - t0) * 1000.0
+                self.assertTrue(sched["scheduled"])
+                self.assertLess(elapsed_ms, 200.0, f"Scheduler blocked caller: {elapsed_ms:.1f}ms")
+                self.assertGreaterEqual(len(sched["threads"]), 2)
+                for th in sched["threads"]:
+                    th.join(timeout=5.0)
+                    self.assertFalse(th.is_alive())
+
+                # Invalid LLM output must fall back to GTF deterministic templates for BOTH building and route
+                rt_exp = db.get_explanation_by_target("route", route_id, db_path=db_file)
+                bld_exp = db.get_explanation_by_target("building", bld_id, db_path=db_file)
+                self.assertIsNotNone(rt_exp)
+                self.assertIsNotNone(bld_exp)
+                self.assertFalse(bool(rt_exp["validation_passed"]))
+                self.assertFalse(bool(bld_exp["validation_passed"]))
+                self.assertIn("[TEMPLATE FALLBACK]", rt_exp["natural_language"])
+                self.assertIn("[TEMPLATE FALLBACK]", bld_exp["natural_language"])
+                self.assertGreaterEqual(len(set(worker_tids)), 2, "Expected distinct async threads for building and route")
+
+                # Dispatch reroute path stays strictly < 500ms even while async LLM workers run
+                client = TestClient(main.app)
+                r_disp = client.post(
+                    f"/api/routes/dispatch?db_path={db_file}",
+                    json={"water_level_delta_m": 0.0, "blocked_edges": ["E-03"]},
+                )
+                self.assertEqual(r_disp.status_code, 200, r_disp.text)
+                self.assertLess(r_disp.json()["compute_ms"], 500.0)
+                exp_gen.join_async_explanation_threads(timeout=5.0)
+
+
 
 if __name__ == "__main__":
     unittest.main()

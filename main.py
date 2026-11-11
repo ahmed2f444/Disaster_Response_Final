@@ -222,6 +222,31 @@ def _compute_drift_distance(
     return 0.0
 
 
+def _trigger_drift_candidate_if_needed(
+    resolved_db: str,
+    drift_distance: float,
+    stats: dict[str, Any],
+) -> None:
+    """Queue 1-tap responder labels and start unpromoted candidate training when drift triggers."""
+    if float(drift_distance) < 0.15 and int(stats.get("total_count") or 0) < 50:
+        return
+    trigger_fn = _load_plugin_callable("feedback.status", "handle_drift_candidate_trigger")
+    if trigger_fn is None:
+        return
+    in_pytest = "pytest" in sys.modules
+    spawn_cand = (not in_pytest) or (os.getenv("AEGIS_DRIFT_AUTO_TRAIN") == "1")
+    try:
+        trigger_fn(
+            db_path=resolved_db,
+            drift_distance=drift_distance,
+            feedback_stats=stats,
+            spawn_training=spawn_cand,
+            async_training=True,
+        )
+    except Exception:
+        pass
+
+
 def _persist_feedback_and_replay(
     item_dict: dict[str, Any],
     resolved_db: str,
@@ -756,6 +781,29 @@ async def upload_satellite_imagery(
             else:
                 assess_msg += f" Consistent capture: route {existing_routes[0]['route_id']} unchanged."
 
+    if assess_status == "completed":
+        par_explain_fn = _load_plugin_callable("explain.generate", "schedule_parallel_explanations")
+        if par_explain_fn is not None:
+            try:
+                sev_ord = {"destroyed": 3, "major": 2, "minor": 1, "no_damage": 0}
+                assessed_blds = [
+                    b for b in get_buildings(db_path=resolved_db)
+                    if str(b.get("data_source", "")) == "resnet18_unet_pretrained"
+                ]
+                priority_blds = sorted(
+                    assessed_blds,
+                    key=lambda b: (
+                        1 if str(b.get("status_flag", "")) == "LOW_CONFIDENCE" else 0,
+                        sev_ord.get(str(b.get("damage_class", "no_damage")).lower(), 0),
+                        -float(b.get("confidence", 1.0)),
+                    ),
+                    reverse=True,
+                )[:3]
+                if priority_blds:
+                    par_explain_fn(buildings=priority_blds, route=None, db_path=resolved_db, max_buildings=3)
+            except Exception:
+                pass
+
     return UploadAssessmentResponse(
         task_id=task_id,
         status=assess_status,
@@ -916,6 +964,7 @@ async def correct_building_classification(
 
     stats = get_feedback_stats(db_path=resolved_db)
     drift_distance = _compute_drift_distance(stats, db_path=resolved_db)
+    _trigger_drift_candidate_if_needed(resolved_db, drift_distance, stats)
 
     return BuildingCorrectionResponse(
         building_id=building_id,
@@ -1602,6 +1651,7 @@ async def submit_responder_feedback(
     res = _persist_feedback_and_replay(item_dict, resolved_db=resolved_db, allow_identical_correction=False)
     stats = get_feedback_stats(db_path=resolved_db)
     drift_distance = _compute_drift_distance(stats, db_path=resolved_db)
+    _trigger_drift_candidate_if_needed(resolved_db, drift_distance, stats)
 
     return FeedbackSubmitResponse(
         feedback_id=res["feedback_id"],

@@ -2,14 +2,20 @@
 
 from __future__ import annotations
 
+import logging
+import threading
 import uuid
 from datetime import datetime, timezone
+from pathlib import Path
 from typing import Any
 
 from db import (
     DEFAULT_DB_PATH,
+    append_audit_event,
     get_active_model_version,
     get_adaptation_runs,
+    get_buildings,
+    get_feedback_logs,
     get_feedback_stats,
     get_second_opinion_count,
     list_model_versions,
@@ -18,8 +24,16 @@ from db import (
     register_model_version,
     set_active_model_version,
 )
+from feedback import config
 from feedback.drift import compute_drift_report
 from feedback.replay import DualReplayBuffer
+from feedback.selection import select_labeling_candidates
+
+_LOGGER = logging.getLogger(__name__)
+_DRIFT_TRIGGER_LOCK = threading.Lock()
+_DRIFT_IN_FLIGHT: set[str] = set()
+_DRIFT_LAST_FB_COUNT: dict[str, int] = {}
+_DRIFT_THREADS: list[threading.Thread] = []
 
 
 def promote_or_stage_adapter(
@@ -187,4 +201,183 @@ def get_adaptation_overview(db_path: str = DEFAULT_DB_PATH) -> dict[str, Any]:
         "replay_summary": replay_summary,
         "registered_versions": versions,
         "recent_runs": runs,
+    }
+
+
+def join_drift_candidate_threads(timeout: float = 60.0) -> None:
+    """Wait for any active background drift-triggered candidate training threads to complete."""
+    with _DRIFT_TRIGGER_LOCK:
+        pending = [t for t in _DRIFT_THREADS if t.is_alive()]
+    for th in pending:
+        th.join(timeout=timeout)
+
+
+def _count_verified_building_labels(db_path: str) -> int:
+    bld_ids = {str(b["building_id"]) for b in get_buildings(db_path=db_path)}
+    verified: set[str] = set()
+    for row in get_feedback_logs(limit=5000, db_path=db_path):
+        tid = str(row.get("target_id") or "")
+        act = str(row.get("responder_action") or "").lower()
+        if tid in bld_ids and act in {"confirm", "correct"}:
+            verified.add(tid)
+    return len(verified)
+
+
+def handle_drift_candidate_trigger(
+    db_path: str = DEFAULT_DB_PATH,
+    *,
+    drift_distance: float | None = None,
+    feedback_stats: dict[str, Any] | None = None,
+    disaster_id: str = "HOUSTON_HARVEY_2017",
+    spawn_training: bool = True,
+    async_training: bool = True,
+    adapter_root: str | Path | None = None,
+    force_trigger: bool = False,
+) -> dict[str, Any]:
+    """Step-1 drift trigger: queue 1-tap labels and start candidate training (`promote=False`) only.
+
+    Guarantees:
+    - Never promotes or replaces the live segmentation model (`promote=False` always).
+    - Promotion stays gated behind `evaluate_safety_gate` (5 checks -> shadow -> gated promotion)
+      and logged in the SHA-256 audit chain.
+    - Routing / MAPPO weights and road graphs are never touched (`routing_policy_coupled=False`).
+    """
+    stats = feedback_stats if feedback_stats is not None else get_feedback_stats(db_path=db_path)
+    total_fb = int(stats.get("total_count") or 0)
+    if drift_distance is None:
+        drift_rep = compute_drift_report(feedback_stats=stats, db_path=db_path)
+        drift_val = float(drift_rep["drift_distance"])
+    else:
+        drift_val = float(drift_distance)
+
+    drift_detected = drift_val >= float(config.DRIFT_THRESHOLD)
+    pending_trigger = drift_detected or total_fb >= 50
+    if not pending_trigger:
+        return {
+            "triggered": False,
+            "drift_detected": False,
+            "candidate_started": False,
+            "promoted": False,
+            "auto_promote": False,
+            "routing_policy_coupled": False,
+            "queued_label_count": 0,
+            "queued_label_ids": [],
+            "status": "idle",
+        }
+
+    db_key = str(Path(db_path).resolve())
+    with _DRIFT_TRIGGER_LOCK:
+        if db_key in _DRIFT_IN_FLIGHT or (not force_trigger and _DRIFT_LAST_FB_COUNT.get(db_key) == total_fb):
+            return {
+                "triggered": False,
+                "drift_detected": drift_detected,
+                "candidate_started": False,
+                "promoted": False,
+                "auto_promote": False,
+                "routing_policy_coupled": False,
+                "queued_label_count": 0,
+                "queued_label_ids": [],
+                "status": "already_triggered",
+            }
+        _DRIFT_LAST_FB_COUNT[db_key] = total_fb
+
+    queue_res = select_labeling_candidates(budget=12, db_path=db_path)
+    queued_ids = [str(c["building_id"]) for c in (queue_res.get("candidates") or [])]
+    verified_cnt = _count_verified_building_labels(db_path)
+
+    if not spawn_training or verified_cnt < 2:
+        append_audit_event(
+            actor_role="PORTION4:DRIFT_TRIGGER",
+            event_type="DRIFT_LABEL_QUEUE_TRIGGERED",
+            payload={
+                "drift_distance": round(drift_val, 4),
+                "total_feedback_samples": total_fb,
+                "verified_label_count": verified_cnt,
+                "queued_label_count": len(queued_ids),
+                "queued_label_ids": queued_ids[:8],
+                "auto_promote": False,
+                "retraining_scope": "segmentation_only",
+                "routing_policy_coupled": False,
+            },
+            db_path=db_path,
+        )
+        return {
+            "triggered": True,
+            "drift_detected": drift_detected,
+            "candidate_started": False,
+            "promoted": False,
+            "auto_promote": False,
+            "routing_policy_coupled": False,
+            "queued_label_count": len(queued_ids),
+            "queued_label_ids": queued_ids,
+            "status": "queued_labels",
+        }
+
+    append_audit_event(
+        actor_role="PORTION4:DRIFT_TRIGGER",
+        event_type="DRIFT_CANDIDATE_TRIGGERED",
+        payload={
+            "drift_distance": round(drift_val, 4),
+            "total_feedback_samples": total_fb,
+            "verified_label_count": verified_cnt,
+            "queued_label_count": len(queued_ids),
+            "auto_promote": False,
+            "retraining_scope": "segmentation_only",
+            "routing_policy_coupled": False,
+        },
+        db_path=db_path,
+    )
+
+    def _run_candidate() -> dict[str, Any] | None:
+        try:
+            from feedback.adapt import run_feedback_driven_tier_a
+
+            return run_feedback_driven_tier_a(
+                disaster_id=disaster_id,
+                epochs=2,
+                promote=False,  # Safety-gate invariant: drift trigger NEVER auto-promotes
+                tier="tier_a",
+                trigger_reason="auto_drift_candidate",
+                db_path=db_path,
+                adapter_root=adapter_root,
+            )
+        except Exception as exc:
+            _LOGGER.warning("Drift candidate adaptation failed cleanly for %s: %s", db_key, exc)
+            return None
+        finally:
+            with _DRIFT_TRIGGER_LOCK:
+                _DRIFT_IN_FLIGHT.discard(db_key)
+
+    if async_training:
+        with _DRIFT_TRIGGER_LOCK:
+            _DRIFT_IN_FLIGHT.add(db_key)
+            _DRIFT_THREADS[:] = [t for t in _DRIFT_THREADS if t.is_alive()]
+            th = threading.Thread(target=_run_candidate, name="p4-drift-candidate", daemon=True)
+            _DRIFT_THREADS.append(th)
+        th.start()
+        return {
+            "triggered": True,
+            "drift_detected": drift_detected,
+            "candidate_started": True,
+            "promoted": False,
+            "auto_promote": False,
+            "routing_policy_coupled": False,
+            "queued_label_count": len(queued_ids),
+            "queued_label_ids": queued_ids,
+            "status": "candidate_training_started",
+        }
+
+    with _DRIFT_TRIGGER_LOCK:
+        _DRIFT_IN_FLIGHT.add(db_key)
+    cand_res = _run_candidate()
+    return {
+        "triggered": True,
+        "drift_detected": drift_detected,
+        "candidate_started": cand_res is not None,
+        "promoted": False,
+        "auto_promote": False,
+        "routing_policy_coupled": False,
+        "queued_label_count": len(queued_ids),
+        "queued_label_ids": queued_ids,
+        "status": (cand_res or {}).get("status", "candidate_failed"),
     }

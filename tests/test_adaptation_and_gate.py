@@ -536,6 +536,111 @@ class TestTask4AdaptationAndSafetyGate(unittest.TestCase):
             bg_fraction = float((probs.argmax(axis=0) == 0).mean())
             self.assertGreater(bg_fraction, 0.5, f"Adapter collapsed background to {bg_fraction:.3f}")
 
+    def test_drift_auto_trigger_stages_shadow_candidate_without_promoting_or_touching_routing(self) -> None:
+        """When drift turns True, trigger queues labels & trains candidate (promote=False -> gate -> shadow), leaving live model & MAPPO untouched."""
+        from fastapi.testclient import TestClient
+        import db
+        import main
+        import seed
+        from feedback import config, status
+
+        routing_weights = ROOT_DIR / "data" / "models" / "routing_ppo.zip"
+        routing_hash_before = _sha256_file(routing_weights) if routing_weights.is_file() else ""
+
+        with tempfile.TemporaryDirectory() as td:
+            db_file = str(Path(td) / "drift_trigger.db")
+            adapter_root = Path(td) / "adapters"
+            seed.seed_sector(db_path=db_file, num_buildings=20)
+            edges_before = db.get_road_edges(db_path=db_file)
+            routes_before = db.get_routes(include_counterfactuals=False, db_path=db_file)
+
+            # Live model starts as base only (no active adapter)
+            self.assertIsNone(db.get_active_model_version(db_path=db_file))
+
+            # Phase A: Drift signal fires before minimum 2 verified labels exist -> queues 1-tap labels only, no promotion
+            trig_queue = status.handle_drift_candidate_trigger(
+                db_path=db_file,
+                drift_distance=0.22,
+                spawn_training=True,
+                async_training=False,
+                adapter_root=adapter_root,
+            )
+            self.assertTrue(trig_queue["triggered"])
+            self.assertTrue(trig_queue["drift_detected"])
+            self.assertGreater(trig_queue["queued_label_count"], 0)
+            self.assertFalse(trig_queue["promoted"])
+            self.assertFalse(trig_queue["routing_policy_coupled"])
+            self.assertIsNone(db.get_active_model_version(db_path=db_file))
+
+            # Phase B: Record responder corrections -> drift trigger starts Tier A candidate training (promote=False!)
+            for bid, cls_name in (
+                ("BLD-0001", "destroyed"),
+                ("BLD-0005", "major"),
+                ("BLD-0010", "minor"),
+                ("BLD-0015", "no_damage"),
+            ):
+                db.log_feedback(
+                    {
+                        "target_id": bid,
+                        "disaster_id": "HOUSTON_HARVEY_2017",
+                        "prediction": "minor",
+                        "uncertainty": 0.45,
+                        "responder_action": "correct",
+                        "corrected_label": cls_name,
+                        "responder_id": "RESP_DRIFT",
+                    },
+                    db_path=db_file,
+                )
+
+            trig_cand = status.handle_drift_candidate_trigger(
+                db_path=db_file,
+                drift_distance=0.28,
+                spawn_training=True,
+                async_training=True,
+                adapter_root=adapter_root,
+                force_trigger=True,
+            )
+            self.assertTrue(trig_cand["triggered"])
+            self.assertTrue(trig_cand["candidate_started"])
+            self.assertFalse(trig_cand["promoted"])
+            self.assertFalse(trig_cand["auto_promote"])
+            self.assertFalse(trig_cand["routing_policy_coupled"])
+
+            status.join_drift_candidate_threads(timeout=60.0)
+
+            # Live segmentation model MUST still be untouched (no active adapter promoted!)
+            self.assertIsNone(db.get_active_model_version(db_path=db_file))
+            versions = db.list_model_versions(limit=10, db_path=db_file)
+            self.assertGreaterEqual(len(versions), 1)
+            self.assertIn(versions[0]["status"], ("shadow", "rejected"))
+            runs = db.get_adaptation_runs(limit=10, db_path=db_file)
+            self.assertTrue(any(r["trigger_reason"] == "auto_drift_candidate" and not r["promoted"] for r in runs))
+            self.assertIn("checks", runs[0]["gate_report"])
+            self.assertEqual(len(runs[0]["gate_report"]["checks"]), 5)
+
+            # Audit log preserves SHA-256 chain integrity & logs drift trigger / gate transition without MODEL_PROMOTED
+            audit_events = [r["event_type"] for r in db.get_audit_log(limit=20, db_path=db_file)]
+            self.assertNotIn("MODEL_PROMOTED", audit_events)
+            self.assertTrue(
+                any(ev in audit_events for ev in ("DRIFT_CANDIDATE_TRIGGERED", "MODEL_SHADOW_STAGED", "MODEL_GATE_REJECTED"))
+            )
+            chain_ok, _, msg = db.verify_audit_chain(db_path=db_file)
+            self.assertTrue(chain_ok, msg)
+
+            # Routing & MAPPO weights remain 100% untouched
+            if routing_hash_before:
+                self.assertEqual(_sha256_file(routing_weights), routing_hash_before)
+            self.assertEqual(db.get_road_edges(db_path=db_file), edges_before)
+            self.assertEqual(db.get_routes(include_counterfactuals=False, db_path=db_file), routes_before)
+
+            # Explicit promotion endpoint STILL governs going live through the 5-check gate & supports rollback
+            client = TestClient(main.app)
+            st_body = client.get(f"/api/adaptation/status?db_path={db_file}").json()
+            self.assertEqual(st_body["active_adapter_version"], "none")
+            self.assertEqual(st_body["retraining_scope"], "segmentation_only")
+            self.assertFalse(st_body["routing_policy_coupled"])
+
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -25,6 +25,22 @@ from explain.shap_explainer import compute_shap_attributions
 from explain.validate import coerce_shap_dict, template_fallback, validate_llm_output
 
 _LOGGER = logging.getLogger(__name__)
+_ASYNC_THREADS_LOCK = threading.Lock()
+_ASYNC_THREADS: list[threading.Thread] = []
+
+
+def _track_async_thread(thread: threading.Thread) -> None:
+    with _ASYNC_THREADS_LOCK:
+        _ASYNC_THREADS[:] = [t for t in _ASYNC_THREADS if t.is_alive()]
+        _ASYNC_THREADS.append(thread)
+
+
+def join_async_explanation_threads(timeout: float = 10.0) -> None:
+    """Wait for active background explanation threads to finish (primarily for test teardown)."""
+    with _ASYNC_THREADS_LOCK:
+        pending = [t for t in _ASYNC_THREADS if t.is_alive()]
+    for th in pending:
+        th.join(timeout=timeout)
 
 
 def _format_top_shap_clause(shap_items: list[dict[str, Any]], top_k: int = 3) -> str:
@@ -309,24 +325,156 @@ def explain_building(
 def schedule_async_route_explanation(
     route: dict[str, Any],
     db_path: str = DEFAULT_DB_PATH,
+    *,
+    use_llm: bool | None = None,
+    force_async: bool = False,
 ) -> bool:
     """Stage 6: Schedule asynchronous GTF LLM route explanation outside the <500ms reroute loop."""
     if not isinstance(route, dict) or not (route.get("route_id") or route.get("plan_id")):
         return False
     route_snapshot = dict(route)
     route_id = str(route_snapshot.get("route_id") or route_snapshot.get("plan_id"))
+    llm_flag = is_llm_enabled() if use_llm is None else bool(use_llm)
 
-    # Persist fast deterministic KernelSHAP explanation immediately unless LLM async worker is enabled
-    if not is_llm_enabled():
+    if not llm_flag and not force_async:
         explain_route(route=route_snapshot, route_id=route_id, db_path=db_path, use_llm=False, persist=True)
         return True
 
     def _worker() -> None:
         try:
-            explain_route(route=route_snapshot, route_id=route_id, db_path=db_path, use_llm=True, persist=True)
+            explain_route(route=route_snapshot, route_id=route_id, db_path=db_path, use_llm=llm_flag, persist=True)
         except Exception as exc:
             _LOGGER.warning("Async route explanation failed for %s: %s", route_id, exc)
 
-    t = threading.Thread(target=_worker, name=f"p3-explain-{route_id}", daemon=True)
+    t = threading.Thread(target=_worker, name=f"p3-route-{route_id}", daemon=True)
+    _track_async_thread(t)
     t.start()
     return True
+
+
+def schedule_async_building_explanation(
+    building: dict[str, Any],
+    db_path: str = DEFAULT_DB_PATH,
+    export_dir: str | Path | None = None,
+    *,
+    use_llm: bool | None = None,
+    force_async: bool = False,
+) -> bool:
+    """Schedule asynchronous GTF Grad-CAM building explanation without blocking assessment or routing."""
+    if not isinstance(building, dict) or not building.get("building_id"):
+        return False
+    bld_snapshot = dict(building)
+    bld_id = str(bld_snapshot["building_id"])
+    llm_flag = is_llm_enabled() if use_llm is None else bool(use_llm)
+
+    if not llm_flag and not force_async:
+        explain_building(
+            building=bld_snapshot,
+            building_id=bld_id,
+            db_path=db_path,
+            export_dir=export_dir,
+            use_llm=False,
+            persist=True,
+        )
+        return True
+
+    def _worker() -> None:
+        try:
+            explain_building(
+                building=bld_snapshot,
+                building_id=bld_id,
+                db_path=db_path,
+                export_dir=export_dir,
+                use_llm=llm_flag,
+                persist=True,
+            )
+        except Exception as exc:
+            _LOGGER.warning("Async building explanation failed for %s: %s", bld_id, exc)
+
+    t = threading.Thread(target=_worker, name=f"p3-bld-{bld_id}", daemon=True)
+    _track_async_thread(t)
+    t.start()
+    return True
+
+
+def schedule_parallel_explanations(
+    *,
+    buildings: list[dict[str, Any]] | None = None,
+    route: dict[str, Any] | None = None,
+    db_path: str = DEFAULT_DB_PATH,
+    export_dir: str | Path | None = None,
+    max_buildings: int = 3,
+    use_llm: bool | None = None,
+    async_workers: bool | None = None,
+) -> dict[str, Any]:
+    """Launch independent building (Grad-CAM) and route (SHAP) LLM explanations concurrently outside <500ms routes."""
+    llm_flag = is_llm_enabled() if use_llm is None else bool(use_llm)
+    run_async = llm_flag if async_workers is None else bool(async_workers)
+
+    selected_buildings: list[dict[str, Any]] = []
+    for b in buildings or []:
+        if isinstance(b, dict) and b.get("building_id"):
+            selected_buildings.append(dict(b))
+        if len(selected_buildings) >= max(0, int(max_buildings)):
+            break
+
+    threads: list[threading.Thread] = []
+    building_ids: list[str] = []
+    route_scheduled = False
+
+    for bld_snap in selected_buildings:
+        bld_id = str(bld_snap["building_id"])
+        building_ids.append(bld_id)
+        if run_async:
+            def _run_bld(b_copy: dict[str, Any] = bld_snap, bid: str = bld_id) -> None:
+                try:
+                    explain_building(
+                        building=b_copy,
+                        building_id=bid,
+                        db_path=db_path,
+                        export_dir=export_dir,
+                        use_llm=llm_flag,
+                        persist=True,
+                    )
+                except Exception as exc:
+                    _LOGGER.warning("Parallel building explanation failed for %s: %s", bid, exc)
+
+            th = threading.Thread(target=_run_bld, name=f"p3-par-bld-{bld_id}", daemon=True)
+            _track_async_thread(th)
+            th.start()
+            threads.append(th)
+        else:
+            explain_building(
+                building=bld_snap,
+                building_id=bld_id,
+                db_path=db_path,
+                export_dir=export_dir,
+                use_llm=False,
+                persist=True,
+            )
+
+    if isinstance(route, dict) and (route.get("route_id") or route.get("plan_id")):
+        rt_snap = dict(route)
+        rt_id = str(rt_snap.get("route_id") or rt_snap.get("plan_id"))
+        route_scheduled = True
+        if run_async:
+            def _run_route(r_copy: dict[str, Any] = rt_snap, rid: str = rt_id) -> None:
+                try:
+                    explain_route(route=r_copy, route_id=rid, db_path=db_path, use_llm=llm_flag, persist=True)
+                except Exception as exc:
+                    _LOGGER.warning("Parallel route explanation failed for %s: %s", rid, exc)
+
+            th_r = threading.Thread(target=_run_route, name=f"p3-par-route-{rt_id}", daemon=True)
+            _track_async_thread(th_r)
+            th_r.start()
+            threads.append(th_r)
+        else:
+            explain_route(route=rt_snap, route_id=rt_id, db_path=db_path, use_llm=False, persist=True)
+
+    return {
+        "scheduled": bool(building_ids or route_scheduled),
+        "async": run_async,
+        "building_ids": building_ids,
+        "route_scheduled": route_scheduled,
+        "threads": threads,
+    }
