@@ -145,6 +145,21 @@ def unpad_spatial(arr: np.ndarray, orig_h: int, orig_w: int) -> np.ndarray:
     return arr[..., :orig_h, :orig_w]
 
 
+def extract_pre_post_rgb_arrays(
+    tensor: torch.Tensor,
+    orig_h: int,
+    orig_w: int,
+    size: int = 256,
+) -> tuple[np.ndarray, np.ndarray]:
+    """Recover `[0, 1]` `(size, size, 3)` pre/post RGB arrays from paired ImageNet-normalized tensor."""
+    unpad = tensor[:, :, :orig_h, :orig_w].detach().cpu().float()
+    if unpad.shape[-2:] != (size, size):
+        unpad = F.interpolate(unpad, size=(size, size), mode="bilinear", align_corners=False)
+    arr = unpad[0].numpy().transpose(1, 2, 0)
+    rgb6 = np.clip(arr * STD + MEAN, 0.0, 1.0).astype(np.float32)
+    return rgb6[..., :3], rgb6[..., 3:]
+
+
 def prepare_paired_input(
     pre_source: str | bytes | bytearray | Path | Image.Image,
     post_source: str | bytes | bytearray | Path | Image.Image,

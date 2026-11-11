@@ -149,7 +149,7 @@ function isOsmActiveSector(roadsGeoJson) {
   if (feats.length === 0) return false;
   return feats.some((f) => {
     const eid = String((f && f.properties && f.properties.edge_id) || "");
-    if (eid.startsWith("OSM-")) return true;
+    if (eid.startsWith("OSM-") || eid.startsWith("IMG-")) return true;
     const coords = (f && f.geometry && f.geometry.coordinates) || [];
     if (coords.length === 0) return false;
     const [lon, lat] = coords[0];
@@ -851,8 +851,13 @@ class SectorMapBuilder {
   buildIncidents(incidents) {
     this.mc.layers.incidents.clearLayers();
     if (!Array.isArray(incidents)) return;
+    const hasSatInc = incidents.some(i => String(i.incident_id || "").startsWith("INC-SAT-"));
+    const customRoads = isOsmActiveSector(tacticalState && tacticalState.roads_geojson);
+    const visibleIncidents = (customRoads && hasSatInc)
+      ? incidents.filter(i => String(i.incident_id || "").startsWith("INC-SAT-"))
+      : incidents;
     const tooltip = document.getElementById("mapTooltip");
-    incidents.forEach((inc) => {
+    visibleIncidents.forEach((inc) => {
       if (!inc.location) return;
       const pos = [inc.location.lat, inc.location.lon];
       const incMarker = L.circleMarker(pos, {

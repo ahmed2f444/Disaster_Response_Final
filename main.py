@@ -683,6 +683,7 @@ async def upload_satellite_imagery(
             post_tile_ref=payload.post_tile_ref,
             bounds=effective_bounds,
             footprints=payload.footprints,
+            preserve_existing_roads=osm_synced,
         )
         if isinstance(assess_res, dict):
             assess_status = str(assess_res.get("status") or "completed")
@@ -713,7 +714,10 @@ async def upload_satellite_imagery(
             except Exception as exc:
                 raise HTTPException(status_code=400, detail=f"Failed to build OSM road graph: {exc}") from exc
         elif assess_status == "completed":
-            assess_msg += " OSM road graph skipped (PNG lacks GeoTIFF CRS coordinates; specify OSM Place, BBox, or .osm XML)."
+            if assess_res.get("road_graph_source") == "imagery":
+                assess_msg += " Road graph extracted directly from uploaded imagery (plain PNG lacks GeoTIFF CRS coordinates for OSM lookup)."
+            else:
+                assess_msg += " OSM road graph skipped (PNG lacks GeoTIFF CRS coordinates; specify OSM Place, BBox, or .osm XML)."
 
     with _ASSESSMENT_TASKS_LOCK:
         _ASSESSMENT_TASKS[task_id] = {

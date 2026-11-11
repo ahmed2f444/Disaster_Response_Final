@@ -155,14 +155,14 @@ def _fleet_units_for_graph(G: nx.Graph) -> list[dict[str, Any]]:
         return [dict(u, location=dict(u["location"])) for u in DEFAULT_FLEET_UNITS]
     node_indices = [int(G.nodes[n].get("node_index", i)) for i, n in enumerate(ordered)]
     n_cnt = len(node_indices)
-    is_osm = any(str(d.get("db_edge_id", "")).startswith("OSM-") for _, _, d in G.edges(data=True))
+    is_custom = any(str(d.get("db_edge_id", "")).startswith(("OSM-", "IMG-")) for _, _, d in G.edges(data=True))
     units: list[dict[str, Any]] = []
     for idx, tmpl in enumerate(DEFAULT_FLEET_UNITS):
         orig = int(tmpl["origin_node"])
-        if is_osm or f"n{orig}" not in G.nodes:
+        if is_custom or f"n{orig}" not in G.nodes:
             orig = node_indices[idx % n_cnt]
         tgt = int(tmpl["default_target_node"])
-        if is_osm or f"n{tgt}" not in G.nodes:
+        if is_custom or f"n{tgt}" not in G.nodes:
             tgt = node_indices[(idx + max(1, n_cnt // 2)) % n_cnt]
             if tgt == orig and n_cnt > 1:
                 tgt = node_indices[(node_indices.index(orig) + 1) % n_cnt]
@@ -243,8 +243,8 @@ class RoutingEngine:
         obs_shape = tuple(getattr(self.model.observation_space, "shape", ()) or ())
         expected_obs = int(obs_shape[0]) if obs_shape else -1
         expected_act = int(getattr(self.model.action_space, "n", 0) or 0)
-        is_osm = any(str(s.get("db_edge_id", "")).startswith("OSM-") for s in active_state.values())
-        if is_osm or self.ix.obs_dim != expected_obs or self.ix.max_deg > expected_act:
+        is_custom = any(str(s.get("db_edge_id", "")).startswith(("OSM-", "IMG-")) for s in active_state.values())
+        if is_custom or self.ix.obs_dim != expected_obs or self.ix.max_deg > expected_act:
             return self._shortest_visible_proposal(start, target, active_state, vis)
 
         cur, path = start, [start]
@@ -393,9 +393,12 @@ def _assign_units_to_incidents(
             for idx, u in enumerate(units, start=1)
         ]
 
+    is_custom_graph = any(str(d.get("db_edge_id", "")).startswith(("OSM-", "IMG-")) for _, _, d in G.edges(data=True))
+    sat_first = is_custom_graph and any(str(i.get("incident_id", "")).startswith("INC-SAT-") for i in active)
     ordered = sorted(
         active,
         key=lambda i: (
+            1 if (sat_first and str(i.get("incident_id", "")).startswith("INC-SAT-")) else 0,
             1 if str(i.get("status", "")).lower() == "open" else 0,
             _SEVERITY_RANK.get(str(i.get("severity", "medium")).lower(), 2),
             str(i.get("time_reported", "")),

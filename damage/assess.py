@@ -35,6 +35,7 @@ from damage.dataset import (
     HOUSTON_EAST_BOUNDS,
     decode_image_input,
     extract_building_masks,
+    extract_pre_post_rgb_arrays,
     pixel_polygon_to_wgs84,
     prepare_paired_input,
     rasterize,
@@ -235,6 +236,7 @@ def run_vision_assessment(
     footprints: list[dict[str, Any]] | None = None,
     weights_path: str | Path | None = None,
     export_dir: str | Path | None = None,
+    preserve_existing_roads: bool = False,
 ) -> dict[str, Any]:
     """Run pretrained ResNet-18 U-Net inference + Grad-CAM + encoder embedding export."""
     active_task_id = task_id or f"TASK_ASSESS_{int(time.time())}_{uuid.uuid4().hex[:6]}"
@@ -406,7 +408,28 @@ def run_vision_assessment(
         enc_hook.remove()
         dec_hook.remove()
 
-    road_changed = False
+    road_graph_source = "existing"
+    img_road_changed = False
+    if not footprints and not preserve_existing_roads:
+        try:
+            from routing.imagery_graph import sync_imagery_road_graph_to_db
+
+            pre_rgb_256, post_rgb_256 = extract_pre_post_rgb_arrays(tensor, orig_h, orig_w)
+            img_road_changed = sync_imagery_road_graph_to_db(
+                pre_image=pre_rgb_256,
+                post_image=post_rgb_256,
+                bounds=active_bounds,
+                pair_digest=pair_digest,
+                building_prob=(1.0 - probs[0]),
+                db_path=db_path,
+            )
+            cur_edges = get_road_edges(db_path=db_path)
+            if cur_edges and all(str(e.get("edge_id", "")).startswith("IMG-") for e in cur_edges):
+                road_graph_source = "imagery"
+        except ImportError:
+            img_road_changed = False
+
+    road_changed = bool(img_road_changed)
     incident_changed = False
     if get_road_edges(db_path=db_path):
         severity_rank = {"destroyed": (3, "critical", "rescue"), "major": (2, "high", "medical"), "minor": (1, "medium", "transport")}
@@ -443,9 +466,10 @@ def run_vision_assessment(
         try:
             from routing.graph import apply_satellite_damage_to_roads
 
-            _, road_changed = apply_satellite_damage_to_roads(db_path=db_path, assessed_buildings=assessed_records)
+            _, dmg_road_changed = apply_satellite_damage_to_roads(db_path=db_path, assessed_buildings=assessed_records)
+            road_changed = bool(img_road_changed or dmg_road_changed)
         except ImportError:
-            road_changed = False
+            pass
 
     elapsed = round(time.perf_counter() - t_start, 3)
     record_model_transition(
@@ -474,6 +498,7 @@ def run_vision_assessment(
         "low_confidence_count": low_conf_count,
         "pair_digest": pair_digest,
         "road_changed": road_changed,
+        "road_graph_source": road_graph_source,
         "incident_changed": incident_changed,
         "bounds": [float(v) for v in active_bounds],
         "geotiff_bounds": [float(v) for v in geotiff_bounds] if geotiff_bounds else None,

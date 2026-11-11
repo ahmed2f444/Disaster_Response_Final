@@ -442,8 +442,8 @@ def apply_satellite_damage_to_roads(
         if w > 0.0:
             damaged.append((float(b.get("centroid_lat", 0.0)), float(b.get("centroid_lon", 0.0)), w))
 
-    is_osm_graph = any(str(r.get("edge_id", "")).startswith("OSM-") for r in rows)
-    if is_osm_graph:
+    is_custom_graph = any(str(r.get("edge_id", "")).startswith(("OSM-", "IMG-")) for r in rows)
+    if is_custom_graph:
         avg_len = sum(float(r.get("length_m", 300.0)) for r in rows) / max(1, len(rows))
         prox_radius_m = max(65.0, min(1800.0, avg_len * 0.35))
     else:
@@ -466,7 +466,7 @@ def apply_satellite_damage_to_roads(
                 min_d = min(haversine_m(b_lat, b_lon, float(pt[1]), float(pt[0])) for pt in coords)
                 if min_d < prox_radius_m:
                     hits.append(weight * (1.0 - min_d / prox_radius_m))
-            if is_osm_graph:
+            if is_custom_graph:
                 hits.sort(reverse=True)
                 score = sum(hits[:3]) / 2.5
             else:

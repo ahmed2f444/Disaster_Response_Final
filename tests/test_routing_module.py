@@ -558,6 +558,145 @@ class TestPhase3RoutingFeaturesAndEngine(unittest.TestCase):
                 "Expected at least one multi-coordinate OSM route",
             )
 
+    def test_imagery_road_extractor_extracts_real_streets_and_skips_roadless_fixture(self) -> None:
+        """Satellite imagery extractor builds IMG-* street graphs from real aerials and preserves fixtures."""
+        import tempfile
+        import numpy as np
+        from PIL import Image
+        import db
+        import seed
+        from damage.dataset import HOUSTON_EAST_BOUNDS
+        from routing.generate import compute_multi_unit_routes
+        from routing.imagery_graph import sync_imagery_road_graph_to_db
+
+        root_dir = Path(__file__).resolve().parent.parent
+        fix_pre = root_dir / "static" / "samples" / "test_fixture_T0_pre_disaster.png"
+        fix_post = root_dir / "static" / "samples" / "test_fixture_T1_post_disaster.png"
+        real_pre = root_dir / "test images" / "hurricane-matthew_00000030_pre_disaster.png"
+        real_post = root_dir / "test images" / "hurricane-matthew_00000030_post_disaster.png"
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            db_path = str(Path(tmpdir) / "img_roads.db")
+            seed.seed_sector(db_path=db_path, num_buildings=20)
+
+            # 1. Synthetic roadless fixture must leave seeded E-01..E-26 intact
+            fix_rgb_h, fix_rgb_w = Image.open(fix_pre).size[1], Image.open(fix_pre).size[0]
+            changed_fix = sync_imagery_road_graph_to_db(
+                pre_image=fix_pre,
+                post_image=fix_post,
+                bounds=HOUSTON_EAST_BOUNDS,
+                pair_digest="FIXT0001",
+                building_prob=np.zeros((fix_rgb_h, fix_rgb_w), dtype=np.float32),
+                db_path=db_path,
+            )
+            self.assertFalse(changed_fix)
+            edges_after_fix = db.get_road_edges(db_path=db_path)
+            self.assertTrue(all(str(e["edge_id"]).startswith("E-") for e in edges_after_fix))
+
+            # 2. Real Hurricane Matthew image extracts curved IMG-* roads and routes across them
+            changed_real = sync_imagery_road_graph_to_db(
+                pre_image=real_pre,
+                post_image=real_post,
+                bounds=HOUSTON_EAST_BOUNDS,
+                pair_digest="MATTHEW1",
+                building_prob=None,
+                db_path=db_path,
+            )
+            self.assertTrue(changed_real)
+            edges_real = db.get_road_edges(db_path=db_path)
+            self.assertGreaterEqual(len(edges_real), 8)
+            min_lon, min_lat, max_lon, max_lat = HOUSTON_EAST_BOUNDS
+            for e in edges_real:
+                self.assertTrue(str(e["edge_id"]).startswith("IMG-MATTHEW1-"))
+                coords = (e.get("geometry") or {}).get("coordinates") or []
+                self.assertGreaterEqual(len(coords), 2)
+                for lon, lat in coords:
+                    self.assertTrue(min_lon <= lon <= max_lon)
+                    self.assertTrue(min_lat <= lat <= max_lat)
+
+            # Repeat call with same digest must be idempotent
+            self.assertFalse(
+                sync_imagery_road_graph_to_db(
+                    pre_image=real_pre,
+                    post_image=real_post,
+                    bounds=HOUSTON_EAST_BOUNDS,
+                    pair_digest="MATTHEW1",
+                    building_prob=None,
+                    db_path=db_path,
+                )
+            )
+
+            plan = compute_multi_unit_routes(db_path=db_path)
+            unit_routes = plan["routes"]
+            self.assertTrue(unit_routes)
+            self.assertTrue(any(len(u["edge_ids"]) >= 1 for u in unit_routes))
+            for u in unit_routes:
+                for eid in u["edge_ids"]:
+                    self.assertTrue(eid.startswith("IMG-MATTHEW1-"))
+
+    def test_upload_endpoint_extracts_roads_automatically_from_real_satellite_upload(self) -> None:
+        """Uploading real-world pre/post PNGs without OSM metadata extracts image streets into /api/state."""
+        import base64
+        import tempfile
+        from unittest import mock
+        from fastapi.testclient import TestClient
+        import damage.assess as assess_mod
+        import seed
+        import main
+
+        root_dir = Path(__file__).resolve().parent.parent
+        pre_file = root_dir / "test images" / "hurricane-matthew_00000030_pre_disaster.png"
+        post_file = root_dir / "test images" / "hurricane-matthew_00000030_post_disaster.png"
+        pre_uri = "data:image/png;base64," + base64.b64encode(pre_file.read_bytes()).decode("ascii")
+        post_uri = "data:image/png;base64," + base64.b64encode(post_file.read_bytes()).decode("ascii")
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            tmp_path = Path(tmpdir)
+            db_file = str(tmp_path / "auto_img_roads.db")
+            export_dir = tmp_path / "exports"
+            export_dir.mkdir(parents=True, exist_ok=True)
+            seed.seed_sector(db_path=db_file, num_buildings=20)
+            client = TestClient(main.app)
+
+            with mock.patch.object(assess_mod, "DEFAULT_EXPORT_DIR", export_dir):
+                resp1 = client.post(
+                    f"/api/assessment/upload?db_path={db_file}",
+                    json={
+                        "pre_disaster_image": pre_uri,
+                        "post_disaster_image": post_uri,
+                        "sector_id": "houston-east",
+                    },
+                )
+            self.assertEqual(resp1.status_code, 200, resp1.text)
+            self.assertEqual(resp1.json()["status"], "completed")
+
+            state = client.get(f"/api/state?db_path={db_file}").json()
+            roads = state["roads_geojson"]["features"]
+            self.assertGreaterEqual(len(roads), 8)
+            self.assertTrue(all(f["properties"]["edge_id"].startswith("IMG-") for f in roads))
+            active_plan = state.get("active_plan")
+            self.assertIsNotNone(active_plan)
+            self.assertTrue(any(u.get("edge_ids") for u in active_plan.get("routes", [])))
+            for u in active_plan.get("routes", []):
+                for eid in u.get("edge_ids", []):
+                    self.assertTrue(eid.startswith("IMG-"))
+
+            # Idempotent second upload stays consistent without changing route ID
+            route_id_1 = active_plan["route_id"]
+            with mock.patch.object(assess_mod, "DEFAULT_EXPORT_DIR", export_dir):
+                resp2 = client.post(
+                    f"/api/assessment/upload?db_path={db_file}",
+                    json={
+                        "pre_disaster_image": pre_uri,
+                        "post_disaster_image": post_uri,
+                        "sector_id": "houston-east",
+                    },
+                )
+            self.assertEqual(resp2.status_code, 200, resp2.text)
+            self.assertIn("Consistent capture", resp2.json()["message"])
+            state2 = client.get(f"/api/state?db_path={db_file}").json()
+            self.assertEqual(state2["active_plan"]["route_id"], route_id_1)
+
 
 
 if __name__ == "__main__":
