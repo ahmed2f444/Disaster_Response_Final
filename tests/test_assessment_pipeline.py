@@ -233,8 +233,8 @@ class TestPhase3AssessmentIntegration(unittest.TestCase):
         import main
         import seed
 
-        t0_path = ROOT_DIR / "test images" / "test_fixture_T0_pre_disaster.png"
-        t1_path = ROOT_DIR / "test images" / "test_fixture_T1_post_disaster.png"
+        t0_path = ROOT_DIR / "static" / "samples" / "test_fixture_T0_pre_disaster.png"
+        t1_path = ROOT_DIR / "static" / "samples" / "test_fixture_T1_post_disaster.png"
         self.assertTrue(t0_path.is_file() and t1_path.is_file(), "Bundled T0/T1 test fixtures missing")
 
         pre_uri = "data:image/png;base64," + base64.b64encode(t0_path.read_bytes()).decode("ascii")
@@ -370,8 +370,8 @@ class TestPhase3AssessmentIntegration(unittest.TestCase):
 
         pre_uri = "data:image/png;base64," + base64.b64encode(t0.read_bytes()).decode("ascii")
         post_uri = "data:image/png;base64," + base64.b64encode(t1.read_bytes()).decode("ascii")
-        fix_t0 = ROOT_DIR / "test images" / "test_fixture_T0_pre_disaster.png"
-        fix_t1 = ROOT_DIR / "test images" / "test_fixture_T1_post_disaster.png"
+        fix_t0 = ROOT_DIR / "static" / "samples" / "test_fixture_T0_pre_disaster.png"
+        fix_t1 = ROOT_DIR / "static" / "samples" / "test_fixture_T1_post_disaster.png"
         fix_pre = "data:image/png;base64," + base64.b64encode(fix_t0.read_bytes()).decode("ascii")
         fix_post = "data:image/png;base64," + base64.b64encode(fix_t1.read_bytes()).decode("ascii")
 
@@ -411,6 +411,37 @@ class TestPhase3AssessmentIntegration(unittest.TestCase):
             state_blds = st["buildings_geojson"]["features"]
             live_features = [f for f in state_blds if f["properties"].get("data_source") == "resnet18_unet_pretrained"]
             self.assertEqual(len(live_features), len(assessed))
+
+    def test_active_upload_overlay_endpoints_and_leaflet_wiring(self) -> None:
+        import main
+
+        html = (ROOT_DIR / "static" / "index.html").read_text(encoding="utf-8")
+        js = (ROOT_DIR / "static" / "app.js").read_text(encoding="utf-8")
+        self.assertIn('id="toggleSatellite"', html)
+        self.assertIn("syncSatelliteOverlay", js)
+        self.assertIn("L.imageOverlay", js)
+        self.assertIn("/active-upload/latest_meta.json", js)
+        self.assertIn("/active-upload/latest_post.png", js)
+        # Returning from Screen 1 upload to Screen 2 must redraw Canvas/SVG when visible
+        self.assertIn("tacticalMap.renderState(tacticalState", js[js.index("function switchScreen"):js.index("const MAX_UPLOAD_TILE_BYTES")])
+
+        openapi_paths = set(main.app.openapi().get("paths", {}).keys())
+        self.assertEqual(len(openapi_paths), 17)
+
+        client = TestClient(main.app)
+        with tempfile.TemporaryDirectory() as td:
+            up_dir = Path(td)
+            (up_dir / "latest_meta.json").write_text('{"pair_digest":"TEST","bounds":[-95.202,29.768,-95.078,29.858]}', encoding="utf-8")
+            (up_dir / "latest_post.png").write_bytes((ROOT_DIR / "static" / "samples" / "test_fixture_T1_post_disaster.png").read_bytes())
+            with mock.patch.object(main, "ACTIVE_UPLOADS_DIR", up_dir):
+                r_meta = client.get("/active-upload/latest_meta.json")
+                self.assertEqual(r_meta.status_code, 200)
+                self.assertEqual(r_meta.json()["pair_digest"], "TEST")
+                r_img = client.get("/active-upload/latest_post.png")
+                self.assertEqual(r_img.status_code, 200)
+                self.assertEqual(r_img.headers.get("content-type"), "image/png")
+                r_bad = client.get("/active-upload/secret.txt")
+                self.assertEqual(r_bad.status_code, 404)
 
 
 if __name__ == "__main__":

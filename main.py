@@ -485,12 +485,32 @@ app.add_middleware(
 WEB_UI_DIR = ROOT_DIR / "static"
 INDEX_HTML_PATH = WEB_UI_DIR / "index.html"
 WEB_UI_DIR.mkdir(parents=True, exist_ok=True)
+ACTIVE_UPLOADS_DIR = (ROOT_DIR / "data" / "uploads").resolve()
 app.mount("/static", StaticFiles(directory=str(WEB_UI_DIR)), name="static")
 
 
 # =====================================================================
 # Static & Offline Client Asset Endpoints (Leaflet v1.9.4 served via /static)
 # =====================================================================
+
+@app.get("/active-upload/{filename}", include_in_schema=False)
+async def serve_active_upload_asset(
+    filename: str = FPath(..., description="Active satellite upload artifact filename"),
+) -> Response:
+    """Serve active pre/post satellite tile and metadata for Leaflet image overlay."""
+    allowed = {
+        "latest_pre.png": "image/png",
+        "latest_post.png": "image/png",
+        "latest_meta.json": "application/json",
+    }
+    media_type = allowed.get(filename)
+    if media_type is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Not found")
+    uploads_root = ACTIVE_UPLOADS_DIR.resolve()
+    target = (uploads_root / filename).resolve()
+    if not target.is_relative_to(uploads_root) or not target.is_file():
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Active satellite upload not available")
+    return FileResponse(target, media_type=media_type, headers={"Cache-Control": "no-store"})
 
 @app.get("/favicon.ico", include_in_schema=False)
 async def favicon() -> Response:
@@ -1758,6 +1778,14 @@ async def api_reset_sector(db_path: str = Query(DEFAULT_DB_PATH)) -> dict[str, A
     """Reset sector database to clean initial baseline state."""
     resolved_db = _resolve_db_path(db_path)
     summary = seed_sector(db_path=resolved_db)
+    if Path(resolved_db).resolve() == Path(_resolve_db_path(DEFAULT_DB_PATH)).resolve():
+        for fname in ("latest_pre.png", "latest_post.png", "latest_meta.json"):
+            candidate = ACTIVE_UPLOADS_DIR / fname
+            if candidate.is_file():
+                try:
+                    candidate.unlink()
+                except OSError:
+                    pass
     state = await api_get_state(db_path=resolved_db)
     return {"status": "reset_success", "summary": summary, "state": state.model_dump()}
 

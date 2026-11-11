@@ -235,6 +235,7 @@ class TacticalLeafletMap {
     buildDarkGridTileLayer().addTo(this.map);
 
     this.layers = {
+      satellite: L.layerGroup().addTo(this.map),
       water: L.layerGroup().addTo(this.map),
       secondaryRoads: L.layerGroup().addTo(this.map),
       buildings: L.layerGroup().addTo(this.map),
@@ -246,6 +247,7 @@ class TacticalLeafletMap {
       fleet: L.layerGroup().addTo(this.map),
     };
 
+    this._activeSatelliteKey = null;
     this.floodPolygon = null;
     this.floodBankNorth = null;
     this.floodBankSouth = null;
@@ -403,6 +405,56 @@ class TacticalLeafletMap {
     }
   }
 
+  async syncSatelliteOverlay(stateData) {
+    const bFeats = (stateData && stateData.buildings_geojson && stateData.buildings_geojson.features) || [];
+    const hasLiveSat = bFeats.some(f => f.properties && f.properties.data_source === "resnet18_unet_pretrained");
+    if (!hasLiveSat) {
+      this.layers.satellite.clearLayers();
+      this._activeSatelliteKey = null;
+      return;
+    }
+
+    const apiBase = getApiBase();
+    try {
+      const res = await fetch(`${apiBase}/active-upload/latest_meta.json`, { cache: "no-store" });
+      if (!res.ok) return;
+      const meta = await res.json();
+      const rawBounds = Array.isArray(meta && meta.bounds) ? meta.bounds : null;
+      if (!rawBounds || rawBounds.length !== 4) return;
+
+      const [minLon, minLat, maxLon, maxLat] = rawBounds.map(Number);
+      if (![minLon, minLat, maxLon, maxLat].every(Number.isFinite)) return;
+
+      const nextKey = `${meta.pair_digest || "upload"}:${minLon},${minLat},${maxLon},${maxLat}`;
+      if (this._activeSatelliteKey === nextKey && this.layers.satellite.getLayers().length > 0) {
+        return;
+      }
+
+      const latLngBounds = [
+        [minLat, minLon],
+        [maxLat, maxLon],
+      ];
+      this.layers.satellite.clearLayers();
+      L.imageOverlay(
+        `${apiBase}/active-upload/latest_post.png?v=${encodeURIComponent(meta.pair_digest || Date.now())}`,
+        latLngBounds,
+        { opacity: 0.78, interactive: false }
+      ).addTo(this.layers.satellite);
+      this._activeSatelliteKey = nextKey;
+
+      const outsideSector =
+        Math.abs(minLon - (-95.202)) > 0.01 ||
+        Math.abs(minLat - 29.768) > 0.01 ||
+        Math.abs(maxLon - (-95.078)) > 0.01 ||
+        Math.abs(maxLat - 29.858) > 0.01;
+      if (outsideSector) {
+        this.map.fitBounds(latLngBounds, SECTOR_OVERVIEW_PADDING);
+      }
+    } catch (err) {
+      console.warn("Satellite overlay sync skipped:", err && err.message);
+    }
+  }
+
   renderState(stateData, overridePlan = null) {
     if (!this.builder || !stateData) return;
     const encoded = new TextEncoder().encode(
@@ -424,6 +476,7 @@ class TacticalLeafletMap {
     const renderMs = performance.now() - t0;
 
     this._updatePerfChips(renderMs, geoBytes, stateData);
+    this.syncSatelliteOverlay(stateData);
   }
 
   renderWhatIfUpdate(stateData, plan) {
@@ -480,8 +533,13 @@ class SectorMapBuilder {
   buildBuildings(geojson) {
     if (!geojson || !geojson.features) return;
     const tooltip = document.getElementById("mapTooltip");
+    const liveSatFeatures = geojson.features.filter(
+      (f) => f.properties && f.properties.data_source === "resnet18_unet_pretrained"
+    );
+    const featuresToRender = liveSatFeatures.length > 0 ? liveSatFeatures : geojson.features;
+    const isSatMode = liveSatFeatures.length > 0;
 
-    geojson.features.forEach((feat) => {
+    featuresToRender.forEach((feat) => {
       const coords = feat.geometry && feat.geometry.coordinates && feat.geometry.coordinates[0];
       if (!coords || coords.length === 0) return;
 
@@ -504,10 +562,10 @@ class SectorMapBuilder {
       L.polygon(latLngRing, {
         renderer: this.mc.canvasRenderer,
         color: styleCfg.color,
-        weight: 1,
-        opacity: 0.55,
+        weight: isSatMode ? 1.8 : 1,
+        opacity: isSatMode ? 0.88 : 0.55,
         fillColor: styleCfg.fillColor,
-        fillOpacity: 0.28,
+        fillOpacity: isSatMode ? 0.26 : 0.28,
         interactive: false,
       }).addTo(this.mc.layers.buildings);
 
@@ -1129,6 +1187,13 @@ function updateUI() {
   // Sync Screen 6 Status Footer with live drift_distance & feedback_count from /api/state
   updateDriftFooterUI(tacticalState.drift_distance, tacticalState.feedback_count);
 
+  const allBldFeats = (tacticalState.buildings_geojson && tacticalState.buildings_geojson.features) || [];
+  const satBldCount = allBldFeats.filter(f => f.properties && f.properties.data_source === "resnet18_unet_pretrained").length;
+  const bldToggleLabel = document.getElementById("lblToggleBuildingsText");
+  if (bldToggleLabel) {
+    bldToggleLabel.textContent = satBldCount > 0 ? `Buildings (${satBldCount} SAT)` : `Buildings (${allBldFeats.length})`;
+  }
+
   let openCnt = tacticalState.road_counts.OPEN;
   let hazCnt = tacticalState.road_counts.HAZARDOUS;
   let blkCnt = tacticalState.road_counts.BLOCKED;
@@ -1635,6 +1700,7 @@ function setActiveCamBtn(btnId) {
 
 // Layer Controls
 [
+  ["toggleSatellite", "lblToggleSatellite", "satellite"],
   ["toggleWater", "lblToggleWater", "water"],
   ["toggleBuildings", "lblToggleBuildings", "buildings"],
   ["toggleLowConf", "lblToggleLowConf", "lowConf"],
@@ -1793,7 +1859,12 @@ function switchScreen(screenId) {
     if (mapShell) mapShell.style.display = "flex";
     if (commandDock) commandDock.style.display = "flex";
     if (tacticalMap && tacticalMap.map) {
-      setTimeout(() => tacticalMap.map.invalidateSize(), 30);
+      setTimeout(() => {
+        tacticalMap.map.invalidateSize(false);
+        if (tacticalState) {
+          tacticalMap.renderState(tacticalState, whatIfPlan);
+        }
+      }, 30);
     }
   } else if (screenId === "screen-route") {
     document.getElementById("navScreen3")?.classList.add("active");
@@ -1988,6 +2059,7 @@ async function triggerDamageAssessment() {
       summaryEl.textContent = uploadData.message ? `${baseSummary} — ${uploadData.message}` : baseSummary;
     }
     resultsCard.style.display = "block";
+    if (tacticalMap) tacticalMap._activeSatelliteKey = null;
     await fetchState();
     await fetchAuditLog();
     showToast(
@@ -2826,7 +2898,9 @@ function inspectSampleBuilding() {
     showToast("Building data is still syncing.", true);
     return;
   }
-  const feat = feats.find(f => f.properties && f.properties.status_flag === "LOW_CONFIDENCE") || feats[0];
+  const satFeats = feats.filter(f => f.properties && f.properties.data_source === "resnet18_unet_pretrained");
+  const pool = satFeats.length > 0 ? satFeats : feats;
+  const feat = pool.find(f => f.properties && f.properties.status_flag === "LOW_CONFIDENCE") || pool[0];
   selectedEntity = { type: "building", data: feat };
   renderInspectorBuilding(feat);
   switchTab("tab-inspect");

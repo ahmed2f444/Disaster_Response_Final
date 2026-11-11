@@ -303,11 +303,21 @@ def _resolve_active_imagery_for_adaptation(
             return padded[0, :, :orig_h, :orig_w], (orig_h, orig_w), geo_b or bounds, "data/uploads/latest_pair"
 
     fixture_dir = (root / "test images").resolve()
-    t0_path = fixture_dir / "test_fixture_T0_pre_disaster.png"
-    t1_path = fixture_dir / "test_fixture_T1_post_disaster.png"
-    if t0_path.is_file() and t1_path.is_file():
-        padded, (orig_h, orig_w), geo_b = prepare_paired_input(t0_path, t1_path, multiple=32, allowed_roots=(root,))
-        return padded[0, :, :orig_h, :orig_w], (orig_h, orig_w), geo_b or HOUSTON_EAST_BOUNDS, "test_images_fixture"
+    if fixture_dir.is_dir():
+        for pre_cand in sorted(fixture_dir.glob("*_pre_disaster.png")):
+            post_cand = fixture_dir / pre_cand.name.replace("_pre_disaster.png", "_post_disaster.png")
+            if post_cand.is_file():
+                padded, (orig_h, orig_w), geo_b = prepare_paired_input(
+                    pre_cand, post_cand, multiple=32, allowed_roots=(root,)
+                )
+                return padded[0, :, :orig_h, :orig_w], (orig_h, orig_w), geo_b or HOUSTON_EAST_BOUNDS, "test_images_real"
+
+    for sample_dir in (fixture_dir, (root / "static" / "samples").resolve()):
+        t0_path = sample_dir / "test_fixture_T0_pre_disaster.png"
+        t1_path = sample_dir / "test_fixture_T1_post_disaster.png"
+        if t0_path.is_file() and t1_path.is_file():
+            padded, (orig_h, orig_w), geo_b = prepare_paired_input(t0_path, t1_path, multiple=32, allowed_roots=(root,))
+            return padded[0, :, :orig_h, :orig_w], (orig_h, orig_w), geo_b or HOUSTON_EAST_BOUNDS, "test_images_fixture"
 
     raise ValueError("No real pre/post satellite imagery pair available on disk for Tier A adaptation.")
 

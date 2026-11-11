@@ -32,8 +32,8 @@ class TestTask4AdaptationAndSafetyGate(unittest.TestCase):
         from damage.model import build_model, load_damage_model
         from feedback import adapt
 
-        t0 = ROOT_DIR / "test images" / "test_fixture_T0_pre_disaster.png"
-        t1 = ROOT_DIR / "test images" / "test_fixture_T1_post_disaster.png"
+        t0 = ROOT_DIR / "static" / "samples" / "test_fixture_T0_pre_disaster.png"
+        t1 = ROOT_DIR / "static" / "samples" / "test_fixture_T1_post_disaster.png"
         x_tensor, (orig_h, orig_w) = prepare_paired_tensor(t0, t1, multiple=32)
         # Small deterministic crop (1, 6, 128, 128) for fast CPU/GPU test
         x_crop = x_tensor[:, :, :128, :128]
@@ -183,8 +183,8 @@ class TestTask4AdaptationAndSafetyGate(unittest.TestCase):
         from damage.dataset import prepare_paired_tensor
         from feedback import adapt, gate, status
 
-        t0 = ROOT_DIR / "test images" / "test_fixture_T0_pre_disaster.png"
-        t1 = ROOT_DIR / "test images" / "test_fixture_T1_post_disaster.png"
+        t0 = ROOT_DIR / "static" / "samples" / "test_fixture_T0_pre_disaster.png"
+        t1 = ROOT_DIR / "static" / "samples" / "test_fixture_T1_post_disaster.png"
         pre_uri = "data:image/png;base64," + base64.b64encode(t0.read_bytes()).decode("ascii")
         post_uri = "data:image/png;base64," + base64.b64encode(t1.read_bytes()).decode("ascii")
         x_tensor, _ = prepare_paired_tensor(t0, t1, multiple=32)
@@ -447,8 +447,8 @@ class TestTask4AdaptationAndSafetyGate(unittest.TestCase):
                 db_path=db_file,
             )
 
-            t0 = ROOT_DIR / "test images" / "test_fixture_T0_pre_disaster.png"
-            t1 = ROOT_DIR / "test images" / "test_fixture_T1_post_disaster.png"
+            t0 = ROOT_DIR / "static" / "samples" / "test_fixture_T0_pre_disaster.png"
+            t1 = ROOT_DIR / "static" / "samples" / "test_fixture_T1_post_disaster.png"
             pre_uri = "data:image/png;base64," + base64.b64encode(t0.read_bytes()).decode("ascii")
             post_uri = "data:image/png;base64," + base64.b64encode(t1.read_bytes()).decode("ascii")
 
@@ -523,8 +523,8 @@ class TestTask4AdaptationAndSafetyGate(unittest.TestCase):
                 weights_path=DEFAULT_WEIGHTS_PATH,
                 data_dir=Path(td) / "no_uploads",
             )
-            t0 = ROOT_DIR / "test images" / "test_fixture_T0_pre_disaster.png"
-            t1 = ROOT_DIR / "test images" / "test_fixture_T1_post_disaster.png"
+            t0 = ROOT_DIR / "static" / "samples" / "test_fixture_T0_pre_disaster.png"
+            t1 = ROOT_DIR / "static" / "samples" / "test_fixture_T1_post_disaster.png"
             x_t, _ = prepare_paired_tensor(t0, t1, multiple=32)
             net, dev = load_damage_model(
                 weights_path=DEFAULT_WEIGHTS_PATH,
