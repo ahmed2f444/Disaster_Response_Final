@@ -1,0 +1,1079 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>DISASTER RESPONSE COMMAND TERMINAL — Leaflet Tactical Edge Web Architecture</title>
+  <link rel="stylesheet" href="/static/leaflet.css">
+  <link rel="stylesheet" href="/static/style.css">
+</head>
+<body>
+  <!-- Toast Notification (Fixed global overlay across all 6 screens) -->
+  <div class="toast-hud" id="toastHud"></div>
+
+  <!-- Top Tactical Command Header -->
+  <header>
+    <div class="brand">
+      <div class="brand-icon-wrap">
+        <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+          <polygon points="12 2 2 7 12 12 22 7 12 2"></polygon>
+          <polyline points="2 17 12 22 22 17"></polyline>
+          <polyline points="2 12 12 17 22 12"></polyline>
+        </svg>
+      </div>
+      <div>
+        <div class="brand-title">
+          <span>DISASTER RESPONSE</span>
+          <span class="highlight">COMMAND TERMINAL</span>
+        </div>
+      </div>
+    </div>
+
+    <div class="header-badges">
+      <button type="button" class="btn-p4-indicator" id="btnPortion4Status" title="Live Portion 4 Active Learning, Drift Monitor &amp; Replay Telemetry" aria-label="Open Portion 4 telemetry monitor">
+        <span class="p4-status-dot" id="p4HeaderDot"></span>
+        <span id="p4HeaderBadgeText">P4 ACTIVE LEARNING: SYNCING</span>
+      </button>
+      <button type="button" class="btn-tour-header" id="btnOpenTour" title="Open the plain-English 5-step walkthrough of how the entire project works">
+        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M2 3h6a4 4 0 0 1 4 4v14a3 3 0 0 0-3-3H2z"/><path d="M22 3h-6a4 4 0 0 0-4 4v14a3 3 0 0 1 3-3h7z"/></svg>
+        <span>HOW IT WORKS (5-STEP TOUR)</span>
+      </button>
+      <button type="button" class="btn-help-header" id="btnOpenGuide" title="Learn what the map elements &amp; purple circles mean">
+        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"/><path d="M9.09 9a3 3 0 0 1 5.83 1c0 2-3 3-3 3"/><line x1="12" y1="17" x2="12.01" y2="17"/></svg>
+        <span>MAP GUIDE &amp; PURPLE CIRCLES</span>
+      </button>
+      <div class="clock-widget" id="clockDisplay">UTC: --:--:--</div>
+    </div>
+  </header>
+
+  <!-- 6-Screen Command Workflow Navigation Bar (workflow/ahmed.pdf) -->
+  <nav class="screen-switcher-bar" aria-label="6-Screen Command Workflow">
+    <button type="button" class="screen-btn" id="navScreen1" onclick="switchScreen('screen-upload')">1. Upload &amp; Assessment</button>
+    <button type="button" class="screen-btn active" id="navScreen2" onclick="switchScreen('screen-map')">2. Tactical Map (Two-Line)</button>
+    <button type="button" class="screen-btn" id="navScreen3" onclick="switchScreen('screen-route')">3. Route Detail &amp; SHAP</button>
+    <button type="button" class="screen-btn" id="navScreen4" onclick="switchScreen('screen-building')">4. Building Grad-CAM &amp; Label</button>
+    <button type="button" class="screen-btn" id="navScreen5" onclick="openApprovalModalManual()">5. Approval &amp; Audit Modal</button>
+    <span class="screen-switcher-meta">6. Telemetry Footer Docked</span>
+  </nav>
+
+  <!-- Sub-Header: Mission Pipeline & Map Layer Toggles -->
+  <div class="sub-bar" id="mapSubBar">
+    <div class="pipeline-tracker">
+      <span style="color:var(--text-bright); font-weight:700;" title="Click any step below to jump straight to that stage">DEMO PIPELINE:</span>
+      <span class="pipeline-step active"><button type="button" class="pipeline-step-btn" data-jump="screen-upload" title="Step 1: Satellite imagery upload &amp; building damage classification (Screen 1)">① Vision Damage</button><span class="pipeline-sep">➔</span></span>
+      <span class="pipeline-step active"><button type="button" class="pipeline-step-btn" data-jump="inspect-bridge" title="Step 2: Inspect road flood depths &amp; open/hazardous/blocked arterials">② Road Status</button><span class="pipeline-sep">➔</span></span>
+      <span class="pipeline-step active"><button type="button" class="pipeline-step-btn" data-jump="screen-route" title="Step 3: View safe detour vs blocked AI shortcut &amp; SHAP explanation (Screen 3)">③ MARL Dispatch &amp; Safety Mask</button><span class="pipeline-sep">➔</span></span>
+      <span class="pipeline-step active"><button type="button" class="pipeline-step-btn" data-jump="tab-sim" title="Step 4: Simulate rising Buffalo Bayou floodwaters on the map">④ Leaflet Vector &amp; Flood Layer</button><span class="pipeline-sep">➔</span></span>
+      <span class="pipeline-step active"><button type="button" class="pipeline-step-btn" data-jump="modal-audit" title="Step 5: Commander approves/rejects &amp; seals SHA-256 audit log (Screen 5)">⑤ Commander Approval &amp; Audit</button></span>
+    </div>
+
+    <div class="layer-controls">
+      <label class="layer-btn checked" id="lblToggleWater"><input type="checkbox" id="toggleWater" checked> Flood Channel</label>
+      <label class="layer-btn checked" id="lblToggleBuildings"><input type="checkbox" id="toggleBuildings" checked> Buildings (220)</label>
+      <label class="layer-btn checked" id="lblToggleLowConf"><input type="checkbox" id="toggleLowConf" checked> Purple Beacons (&lt;0.65)</label>
+      <label class="layer-btn checked" id="lblToggleSecondaryRoads"><input type="checkbox" id="toggleSecondaryRoads" checked> Streets Grid</label>
+      <label class="layer-btn checked" id="lblToggleRoutes"><input type="checkbox" id="toggleRoutes" checked> Fleet &amp; Two-Line Routes</label>
+      <label class="layer-btn checked" id="lblToggleLabels"><input type="checkbox" id="toggleLabels" checked> Node Tags</label>
+      <label class="layer-btn checked" id="lblToggleIncidents"><input type="checkbox" id="toggleIncidents" checked> Incidents</label>
+    </div>
+  </div>
+
+  <!-- Main Workspace -->
+  <div class="workspace" id="mapWorkspace">
+    
+    <!-- Offline Leaflet Tactical Simulation Map Viewport -->
+    <div class="map-shell" id="mapShell">
+      <div id="leafletMap"></div>
+      
+      <!-- Map Viewport Presets Dock -->
+      <div class="camera-dock">
+        <button class="cam-btn active" id="btnCamIso" title="Full Houston-East Sector View [1]">
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 2L2 7l10 5 10-5-10-5zM2 17l10 5 10-5M2 12l10 5 10-5"/></svg>
+          SECTOR OVERVIEW
+        </button>
+        <button class="cam-btn" id="btnCamTop" title="Fit Active Operational Bounds [2]">
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="3" width="18" height="18" rx="2"/><circle cx="12" cy="12" r="3"/></svg>
+          FIT BOUNDS
+        </button>
+        <button class="cam-btn" id="btnCamBridge" title="Bayou Bridge Chokepoint Focus [3]">
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M4 19L20 19M4 15L20 15M4 15L4 19M20 15L20 19M8 15C8 10 16 10 16 15"/></svg>
+          BAYOU CHOKEPOINT
+        </button>
+        <button class="cam-btn" id="btnCamDrone" title="Track USAR Rescue Drone RSC-01 [4]">
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="4"/><line x1="12" y1="2" x2="12" y2="6"/><line x1="12" y1="18" x2="12" y2="22"/><line x1="2" y1="12" x2="6" y2="12"/><line x1="18" y1="12" x2="22" y2="12"/></svg>
+          RSC-01 TRACK
+        </button>
+        <button class="cam-btn" id="btnCamReset" title="Reset Map View" aria-label="Reset Map View">
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 12a9 9 0 1 0 9-9 9.75 9.75 0 0 0-6.74 2.74L3 8"/><path d="M3 3v5h5"/></svg>
+        </button>
+        <span class="cam-sep" aria-hidden="true"></span>
+        <button type="button" class="cam-btn cam-btn-extend" id="btnExtendMap" aria-pressed="false" title="Extend Map Across Full Workspace [F]">
+          <svg id="extendMapIcon" width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><polyline points="15 3 21 3 21 9"/><polyline points="9 21 3 21 3 15"/><line x1="21" y1="3" x2="14" y2="10"/><line x1="3" y1="21" x2="10" y2="14"/></svg>
+          <span id="extendMapLabel">EXTEND MAP</span>
+        </button>
+      </div>
+
+      <!-- Telemetry HUD -->
+      <div class="viewport-hud">
+        <div class="hud-chip">
+          <span>SURGE:</span>
+          <span class="val" id="hudSurgeVal">+0.00 m</span>
+        </div>
+        <div class="hud-chip">
+          <span>RENDER:</span>
+          <span class="val" id="hudRenderMsVal" style="color:var(--accent-emerald); font-variant-numeric:tabular-nums;">-- ms (&lt;50ms)</span>
+        </div>
+        <div class="hud-chip">
+          <span>ENGINE:</span>
+          <span class="val" id="hudWaterState" style="color:#38bdf8;">LEAFLET 1.9.4</span>
+        </div>
+      </div>
+
+      <!-- Interactive Map Tooltip -->
+      <div class="map-tooltip" id="mapTooltip"></div>
+
+      <!-- Tactical Map Legend Dock -->
+      <div class="legend-dock">
+        <div class="legend-badge"><div class="legend-dot" style="background:#10b981;"></div><span>OPEN ROAD</span></div>
+        <div class="legend-badge"><div class="legend-dot" style="background:#f59e0b;"></div><span>HAZARDOUS</span></div>
+        <div class="legend-badge"><div class="legend-dot" style="background:#ef4444;"></div><span>BLOCKED</span></div>
+        <div class="legend-badge"><div class="legend-dot" style="background:#e879f9; border: 1px dashed #ffffff; border-radius:50%;"></div><span>LOW-CONF (&lt;0.65)</span></div>
+        <div class="legend-badge"><div class="legend-dot" style="background:#00e5ff;"></div><span>SAFE ROUTE</span></div>
+        <div class="legend-badge"><div class="legend-dot" style="background:transparent; border-bottom: 2px dashed #f43f5e; width:14px;"></div><span>PPO RAW</span></div>
+        <div class="legend-badge"><div class="legend-dot" style="background:#34d399; border-radius:50%;"></div><span>RSC-01</span></div>
+        <span class="legend-hint">Drag: Pan • Scroll: Zoom • Click Marker/Edge: Inspect / What-If</span>
+      </div>
+
+      <!-- Fallback message if Leaflet bundle unavailable -->
+      <div id="mapFallbackBanner">
+        <h3 style="color:#f87171; margin-bottom:8px;">Leaflet Map Renderer Unavailable</h3>
+        <p style="font-size:12px; color:#cbd5e1; margin-bottom:12px;">Unable to load offline <code>/static/leaflet.js</code> vector bundle. Check local server asset routing.</p>
+      </div>
+    </div>
+
+    <!-- Right Tactical Command Dock (Double-Bezel) -->
+    <aside class="command-dock">
+      
+      <!-- Top Persistent Telemetry Shell -->
+      <div class="telemetry-shell">
+        <div class="kpi-row">
+          <div class="kpi-card">
+            <div class="kpi-val" id="kpiOpen" style="color:var(--status-open);">19</div>
+            <div class="kpi-lbl">OPEN ARTERIALS</div>
+          </div>
+          <div class="kpi-card">
+            <div class="kpi-val" id="kpiHazard" style="color:var(--status-hazard);">7</div>
+            <div class="kpi-lbl">HAZARDOUS</div>
+          </div>
+          <div class="kpi-card">
+            <div class="kpi-val" id="kpiBlocked" style="color:var(--status-blocked);">0</div>
+            <div class="kpi-lbl">BLOCKED</div>
+          </div>
+          <div class="kpi-card">
+            <div class="kpi-val" id="kpiEta" style="color:var(--accent-cyan);">810s</div>
+            <div class="kpi-lbl">FLEET ETA</div>
+          </div>
+        </div>
+
+        <!-- ETA Delta Banner -->
+        <div class="eta-delta-bar">
+          <span style="color:var(--text-muted);">ACTIVE ROUTE PLAN STATUS:</span>
+          <span class="eta-delta-badge baseline" id="etaDeltaBadge">BASELINE PLAN (&lt;500ms REROUTE)</span>
+        </div>
+      </div>
+
+      <!-- Command Dock View Tabs -->
+      <div class="dock-tabs">
+        <button class="dock-tab active" data-tab="tab-sim">
+          <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3 16c1.8-1.5 3.6-1.5 5.4 0s3.6 1.5 5.4 0 3.6-1.5 5.4 0"/><path d="M3 20c1.8-1.5 3.6-1.5 5.4 0s3.6 1.5 5.4 0 3.6-1.5 5.4 0"/><path d="M12 11V4m-3 3 3-3 3 3"/></svg>
+          <span>SURGE</span>
+        </button>
+        <button class="dock-tab" data-tab="tab-inspect">
+          <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="8"/><circle cx="12" cy="12" r="2.5"/><path d="M12 2v3m0 14v3M2 12h3m14 0h3"/></svg>
+          <span>INSPECT</span>
+        </button>
+        <button class="dock-tab" data-tab="tab-narrative">
+          <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/><line x1="16" y1="13" x2="8" y2="13"/><line x1="16" y1="17" x2="8" y2="17"/></svg>
+          <span>DISPATCH</span>
+        </button>
+        <button class="dock-tab" data-tab="tab-guide">
+          <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="9.5"/><path d="M9.5 9.2a2.5 2.5 0 0 1 4.9.8c0 1.6-2.4 2.2-2.4 2.2"/><line x1="12" y1="16.5" x2="12.01" y2="16.5"/></svg>
+          <span>MAP GUIDE</span>
+        </button>
+        <button class="dock-tab" data-tab="tab-audit">
+          <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/><polyline points="9 12 11.2 14.2 15.5 10"/></svg>
+          <span>AUDIT</span>
+        </button>
+      </div>
+
+      <!-- Tab Content Deck -->
+      <div class="tab-deck">
+        
+        <!-- TAB 1: Flood Surge Simulator & What-If Sandbox -->
+        <div class="shell-card" id="tab-sim">
+          <div class="card-header">
+            <div class="card-title">
+              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M2 12h20M2 12l5-5m-5 5 5 5M22 12l-5-5m5 5-5 5"/></svg>
+              <span>BUFFALO BAYOU FLOOD SURGE SIMULATOR</span>
+            </div>
+            <span style="font-family:var(--font-mono); font-size:10px; color:var(--text-muted);">&lt;500ms REROUTE</span>
+          </div>
+
+          <div class="core-box">
+            <div class="slider-header">
+              <span>Buffalo Bayou Water Level Surge (Δm):</span>
+              <span id="floodValBadge" style="font-family:var(--font-mono); font-weight:700; color:var(--accent-cyan);">+0.00 m (BASELINE)</span>
+            </div>
+            <input type="range" id="floodSlider" min="-0.10" max="0.75" step="0.05" value="0.0">
+            
+            <div class="surge-gauge-meter">
+              <div class="surge-fill" id="surgeFill"></div>
+              <div class="surge-text" id="surgeGaugeText">BAYOU SURGE GAUGE: +0.00m (NORMAL POOL)</div>
+            </div>
+
+            <div class="preset-btns">
+              <button class="btn-preset" onclick="setSurgePreset(0.0)">0.0m BASE</button>
+              <button class="btn-preset" onclick="setSurgePreset(0.25)">+0.25m ELEV</button>
+              <button class="btn-preset" onclick="setSurgePreset(0.50)">+0.50m CRIT</button>
+              <button class="btn-preset" onclick="setSurgePreset(0.70)">+0.70m MAX</button>
+            </div>
+          </div>
+
+          <!-- Active Road Closures & Manual Overrides List -->
+          <div class="core-box closures-container">
+            <div style="display:flex; justify-content:space-between; align-items:center;">
+              <span style="font-weight:700;">MANUAL ROAD TOGGLES:</span>
+              <span style="font-size:10px; color:var(--text-dim);">Click any road to close or reopen</span>
+            </div>
+            <div class="closure-tags-wrap" id="closureTagsWrap">
+              <span style="color:var(--text-dim); font-size:10.5px;">No manual overrides active. Click any road edge on the map to close an open corridor or reopen a blocked one.</span>
+            </div>
+          </div>
+
+          <div class="action-btn-row">
+            <button class="btn btn-sim" id="simToggleBtn">
+              <svg width="14" height="14" viewBox="0 0 24 24" fill="currentColor"><polygon points="5 3 19 12 5 21 5 3"></polygon></svg>
+              <span>AUTO-SIMULATE RISING FLOOD SURGE</span>
+            </button>
+            <button class="btn btn-secondary" id="resetBtn" title="Reset all changes to clean baseline">
+              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 12a9 9 0 1 0 9-9 9.75 9.75 0 0 0-6.74 2.74L3 8"/><path d="M3 3v5h5"/></svg>
+              <span>RESET</span>
+            </button>
+          </div>
+
+          <div class="action-btn-row" style="margin-top:8px;">
+            <button type="button" class="btn btn-secondary" id="btnSimulateSatBlockage" style="width:100%; font-size:11px; border-color:rgba(245,158,11,0.5); color:#fbbf24;">
+              <span>SIMULATE LIVE SATELLITE BLOCKAGE (ARBITRARY MARL REROUTE)</span>
+            </button>
+          </div>
+
+          <div class="plain-explainer-banner compact">
+            <strong>How this works:</strong> 0 corridors start blocked by default. Click any road to toggle it Open/Blocked, drag the surge slider for dry-run What-If (<code>POST /api/routes/what-if</code>), or trigger <strong>Simulate Live Satellite Blockage</strong> / <strong>Recompute MARL Dispatch</strong> for persistent PPO + safety-mask recalculation (<code>&lt; 500ms</code>).
+          </div>
+        </div>
+
+        <!-- TAB 2: Tactical Entity Inspector -->
+        <div class="shell-card" id="tab-inspect" style="display:none;">
+          <div class="card-header">
+            <div class="card-title">
+              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="11" cy="11" r="8"></circle><line x1="21" y1="21" x2="16.65" y2="16.65"></line></svg>
+              <span>TACTICAL ENTITY INSPECTOR</span>
+            </div>
+            <span style="font-family:var(--font-mono); font-size:10px; color:var(--text-muted);" id="inspectorTypeTag">READY</span>
+          </div>
+
+          <div class="core-box inspector-card" id="inspectorCardBody">
+            <div class="inspector-empty">
+              Click any <strong>Building marker</strong> (to inspect ConvNeXt-Tiny damage classification &amp; Grad-CAM attribution) or any <strong>Road segment</strong> (to toggle blockade).
+              <div class="quick-inspect-actions">
+                <button type="button" class="btn-quick-sample purple" id="btnQuickInspectPurple">
+                  <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true"><circle cx="12" cy="12" r="9" stroke-dasharray="3.5 2.5"/><circle cx="12" cy="12" r="3" fill="currentColor" stroke="none"/></svg>
+                  <span>Sample Purple Building</span>
+                </button>
+                <button type="button" class="btn-quick-sample" id="btnQuickInspectBridge">
+                  <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4 18V8m16 10V8M2 8h20v4H2zM7 8l-2 4m6-4-2 4m6-4-2 4"/></svg>
+                  <span>Sample Blocked Bridge (E-03)</span>
+                </button>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <!-- TAB 3: Multi-Unit Safe Route Narrative & Commander Gate -->
+        <div class="shell-card" id="tab-narrative" style="display:none;">
+          <div class="card-header">
+            <div class="card-title">
+              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"></path><polyline points="14 2 14 8 20 8"></polyline><line x1="16" y1="13" x2="8" y2="13"></line><line x1="16" y1="17" x2="8" y2="17"></line><polyline points="10 9 9 9 8 9"></polyline></svg>
+              <span>VALIDATED ROUTE BRIEFING &amp; GATE</span>
+            </div>
+            <span class="badge-pill" style="font-size:9.5px; background:rgba(245,158,11,0.15); color:#fbbf24;" id="tabRouteStatusBadge">PENDING_APPROVAL</span>
+          </div>
+
+          <div class="plain-explainer-banner compact">
+            <strong>Two-Line Routing:</strong> <span style="color:var(--accent-cyan);">Solid cyan</span> = safe route dispatched around flooded edges; <span style="color:var(--accent-rose);">dashed rose</span> = shortcut the AI initially wanted before safety rules blocked it.
+          </div>
+
+          <div class="narrative-deck" id="narrativeDeck">Loading deterministic route narrative...</div>
+
+          <!-- Unit Breakdown Cards -->
+          <div class="unit-route-pills" id="unitRouteCards">
+            <!-- Populated dynamically -->
+          </div>
+
+          <div class="action-btn-row" style="margin-bottom:8px;">
+            <button type="button" class="btn btn-secondary" id="btnRecomputeDispatch" style="width:100%; font-size:11px;">
+              <span>RECOMPUTE MARL DISPATCH (PORTION 2)</span>
+            </button>
+          </div>
+          <div class="action-btn-row">
+            <button type="button" class="btn btn-approve" id="approveBtn" style="flex:2;">
+              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><polyline points="20 6 9 17 4 12"></polyline></svg>
+              <span>APPROVE &amp; DISPATCH</span>
+            </button>
+            <button type="button" class="btn btn-reject-compact" id="rejectBtnTab" onclick="commanderDecisionAction('reject')" style="flex:1;">
+              <span>REJECT</span>
+            </button>
+          </div>
+        </div>
+
+        <!-- TAB 4: Map Guide & Purple Circles Explainer -->
+        <div class="shell-card" id="tab-guide" style="display:none;">
+          <div class="card-header">
+            <div class="card-title">
+              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"/><path d="M9.09 9a3 3 0 0 1 5.83 1c0 2-3 3-3 3"/><line x1="12" y1="17" x2="12.01" y2="17"/></svg>
+              <span>HOW THE LEAFLET TACTICAL MAP WORKS &amp; FIELD GUIDE</span>
+            </div>
+            <span style="font-family:var(--font-mono); font-size:10px; color:var(--accent-purple);">TACTICAL FIELD GUIDE</span>
+          </div>
+
+          <div class="guide-card-deck">
+
+            <!-- EXPLANATION: HOW THE 5 PORTIONS CONNECT -->
+            <div class="guide-feature-box" style="border-left: 3px solid var(--accent-emerald);">
+              <div class="guide-feature-title" style="color:var(--accent-emerald); justify-content:space-between;">
+                <span class="guide-title-label">
+                  <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><polygon points="12 2 2 7 12 12 22 7 12 2"/><polyline points="2 17 12 22 22 17"/><polyline points="2 12 12 17 22 12"/></svg>
+                  <span>HOW THIS PROJECT WORKS (5 PORTIONS)</span>
+                </span>
+                <button type="button" class="btn-quick-sample" id="btnOpenTourFromGuide">Open Full 5-Step Tour →</button>
+              </div>
+              <div class="guide-feature-desc">
+                <strong>P1 (Vision)</strong> scores building damage from satellite tiles → <strong>P2 (MARL Routing)</strong> plans safe emergency detours around flooded roads → <strong>P3 (Explainable AI)</strong> generates SHAP/Grad-CAM justifications → <strong>P4 (Active Learning)</strong> collects responder feedback on unsure purple buildings → <strong>P5 (This Web Console)</strong> validates AI explanations, enforces Commander approval, and locks every decision in a SHA-256 ledger.
+              </div>
+            </div>
+
+            <!-- EXPLANATION: WHAT ARE THE PURPLE CIRCLES? -->
+            <div class="guide-feature-box" style="border-left: 3px solid var(--accent-purple);">
+              <div class="guide-feature-title" style="color:var(--accent-purple);">
+                <span class="guide-title-label">
+                  <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true"><circle cx="12" cy="12" r="9" stroke-dasharray="3.5 2.5"/><circle cx="12" cy="12" r="3" fill="currentColor" stroke="none"/></svg>
+                  <span>WHAT ARE THE PURPLE CIRCLES / RINGS?</span>
+                </span>
+              </div>
+              <div class="guide-feature-desc">
+                The pulsing purple dashed SVG halo rings over buildings represent <strong>LOW-CONFIDENCE AI DETECTIONS (&lt; 0.65)</strong> from the <code>ConvNeXt-Tiny</code> satellite damage assessment model.<br><br>
+                <strong>Why they exist:</strong> Following a hurricane or flood, satellite aerial imagery may be partially occluded by cloud shadow, tree canopy, or severe flood reflections, resulting in ambiguous damage predictions. When softmax classification confidence drops below <strong>65%</strong> (calibrated via temperature scaling T = 1.28), the system flags the structure.<br><br>
+                <strong>Tactical Action:</strong> Incident commanders and Urban Search &amp; Rescue (USAR) units prioritize these purple beacons for <strong>close-up drone inspection (UAV RSC-01)</strong> or ground team verification before committing heavy logistics.
+              </div>
+            </div>
+
+            <!-- EXPLANATION: CANVAS CIRCLE MARKERS & DAMAGE CLASSES -->
+            <div class="guide-feature-box" style="border-left: 3px solid var(--accent-cyan);">
+              <div class="guide-feature-title">
+                <span class="guide-title-label">
+                  <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="4" y="4" width="16" height="16" rx="3"/><circle cx="12" cy="12" r="3.5"/></svg>
+                  <span>BUILDING CIRCLE MARKERS &amp; DAMAGE CLASSES</span>
+                </span>
+              </div>
+              <div class="guide-feature-desc">
+                All 220 buildings in this sector render on Leaflet Canvas circle markers paired with GeoJSON footprints color-coded by Section 3.2 status:
+                <div style="margin-top:6px; display:flex; flex-direction:column; gap:4px;">
+                  <div><span class="guide-tag" style="background:rgba(16,185,129,0.2); color:#34d399;">GREEN (no_damage)</span> <strong>No Damage:</strong> Pristine, structurally sound buildings.</div>
+                  <div><span class="guide-tag" style="background:rgba(234,179,8,0.2); color:#facc15;">YELLOW (minor)</span> <strong>Minor Damage:</strong> Superficial roof/facade loss, generally habitable.</div>
+                  <div><span class="guide-tag" style="background:rgba(249,115,22,0.2); color:#fb923c;">ORANGE (major)</span> <strong>Major Damage:</strong> Severe structural failure, perimeter hazard.</div>
+                  <div><span class="guide-tag" style="background:rgba(239,68,68,0.2); color:#f87171;">RED (destroyed)</span> <strong>Destroyed:</strong> Collapsed rubble slabs, highest search &amp; rescue priority.</div>
+                </div>
+              </div>
+            </div>
+
+            <!-- EXPLANATION: ROAD NETWORKS & CHOKEPOINTS -->
+            <div class="guide-feature-box" style="border-left: 3px solid var(--status-hazard);">
+              <div class="guide-feature-title">
+                <span class="guide-title-label">
+                  <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="5" cy="18" r="2.5"/><circle cx="19" cy="6" r="2.5"/><path d="M7.5 18H11a2 2 0 0 0 2-2V8a2 2 0 0 1 2-2h1.5"/></svg>
+                  <span>ARTERIAL HIGHWAYS &amp; TWO-LINE ROUTES</span>
+                </span>
+              </div>
+              <div class="guide-feature-desc">
+                The vector map displays two distinct road &amp; route layers:
+                <div style="margin-top:6px; display:flex; flex-direction:column; gap:4px;">
+                  <div><span class="guide-tag" style="background:rgba(0,229,255,0.15); color:var(--accent-cyan);">PRIMARY ARTERIALS (E-01 to E-26)</span> Clickable road edges color-coded <strong>GREEN (Open)</strong>, <strong>AMBER (Hazardous)</strong>, or <strong>RED (Blocked)</strong>.</div>
+                  <div><span class="guide-tag" style="background:rgba(244,63,94,0.15); color:#fb7185;">TWO-LINE ROUTING</span> Solid cyan path shows CSP safety-filtered route; dashed rose path shows pre-mask PPO proposal.</div>
+                  <div><span class="guide-tag" style="background:rgba(245,158,11,0.2); color:#fbbf24;">BAYOU BRIDGE (N4)</span> The critical Buffalo Bayou chokepoint linking north depots and south targets.</div>
+                </div>
+              </div>
+            </div>
+
+            <!-- EXPLANATION: BAYOU FLOOD VECTOR CORRIDOR -->
+            <div class="guide-feature-box" style="border-left: 3px solid var(--accent-water);">
+              <div class="guide-feature-title">
+                <span class="guide-title-label">
+                  <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M2 10c2-2 4-2 6 0s4 2 6 0 4-2 6 0"/><path d="M2 16c2-2 4-2 6 0s4 2 6 0 4-2 6 0"/></svg>
+                  <span>BAYOU FLOOD CORRIDOR &amp; SURGE OVERLAY</span>
+                </span>
+              </div>
+              <div class="guide-feature-desc">
+                Client-side Buffalo Bayou floodplain polygons dynamically expand in real time as you raise the surge slider, visualizing corridor inundation and triggering <strong>&lt;500ms What-If safe rerouting</strong>.
+              </div>
+            </div>
+
+            <!-- EXPLANATION: EMERGENCY UNITS -->
+            <div class="guide-feature-box" style="border-left: 3px solid var(--accent-emerald);">
+              <div class="guide-feature-title">
+                <span class="guide-title-label">
+                  <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><polygon points="3 11 22 2 13 21 11 13 3 11"/></svg>
+                  <span>EMERGENCY FLEET &amp; INCIDENTS</span>
+                </span>
+              </div>
+              <div class="guide-feature-desc">
+                <div><span class="guide-tag" style="background:rgba(0,229,255,0.2); color:#00e5ff;">MED-01</span> Ambulance dispatched from N0 Depot to N8 Trauma Center.</div>
+                <div style="margin-top:4px;"><span class="guide-tag" style="background:rgba(192,132,252,0.2); color:#c084fc;">TRN-01</span> Heavy Armored Transport carrying evacuees to N6 SW Shelter.</div>
+                <div style="margin-top:4px;"><span class="guide-tag" style="background:rgba(52,211,153,0.2); color:#34d399;">RSC-01</span> USAR Tactical Drone inspecting low-confidence zones.</div>
+              </div>
+            </div>
+
+          </div>
+        </div>
+
+        <!-- TAB 5: Cryptographic SHA-256 Audit Ledger -->
+        <div class="shell-card" id="tab-audit" style="display:none;">
+          <div class="card-header">
+            <div class="card-title">
+              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="11" width="18" height="11" rx="2" ry="2"></rect><path d="M7 11V7a5 5 0 0 1 10 0v4"></path></svg>
+              <span>TAMPER-EVIDENT SHA-256 HASH-CHAINED LEDGER</span>
+            </div>
+            <span style="font-family:var(--font-mono); font-size:10px; color:var(--accent-purple);" id="auditEntriesCount">0 ENTRIES</span>
+          </div>
+
+          <div class="audit-table-shell">
+            <table class="audit-table">
+              <thead>
+                <tr>
+                  <th style="width:28px;">#</th>
+                  <th>Event Type</th>
+                  <th>Actor Role</th>
+                  <th>Chain Hash</th>
+                </tr>
+              </thead>
+              <tbody id="auditTableBody">
+                <tr><td colspan="4" style="text-align:center; padding:12px; color:var(--text-dim);">Loading cryptographic audit ledger...</td></tr>
+              </tbody>
+            </table>
+          </div>
+
+          <div style="font-size:10.5px; color:var(--text-muted); font-family:var(--font-mono); padding:0 4px;">
+            Every commander approval, rejection, assessment upload, and building label correction is cryptographically chained with SHA-256 hash continuity.
+          </div>
+        </div>
+
+      </div>
+
+    </aside>
+  </div>
+
+  
+  <!-- =========================================================================
+       SCREEN 1: UPLOAD SCREEN (TRIGGERS DAMAGE ASSESSMENT)
+       ========================================================================= -->
+  <div class="screen-view" id="screenUploadView">
+    <div style="max-width:1100px; margin:0 auto; width:100%;">
+      <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:18px;">
+        <div>
+          <h2 style="font-size:18px; font-weight:800; color:var(--text-bright); text-transform:uppercase;">
+            Screen 1: Bi-Temporal Satellite Imagery Ingestion & Damage Assessment
+          </h2>
+          <p style="font-size:12px; color:var(--text-muted); margin-top:4px;">
+            Portion 1 (Ammar) Bi-Temporal ResNet-18 U-Net Segmentation &amp; Grad-CAM Pipeline (Pretrained Weights Active)
+          </p>
+        </div>
+        <span class="badge-pill badge-live"><span class="dot"></span>PORTION 1 MODEL ACTIVE</span>
+      </div>
+
+      <div class="plain-explainer-banner">
+        <strong>What happens on Screen 1:</strong> Upload paired <strong>Before (T0)</strong> and <strong>After (T1)</strong> satellite tiles — or click <strong>Load Dataset Sample (T0 + T1)</strong> — so the pretrained <code>unet_resnet18_best.pth</code> model detects deterministic building damage, preserves responder label corrections, and updates incidents/corridors to trigger persistent MARL + SHAP recalculation when hazards change.
+      </div>
+
+      <div class="upload-shell-grid">
+        <div class="upload-tile-dropzone" id="preDropZone" onclick="document.getElementById('preImgInput').click()">
+          <span class="upload-tile-badge" style="background:rgba(16,185,129,0.15); color:#34d399;">PRE-DISASTER SATELLITE TILE (T0)</span>
+          <div class="upload-tile-preview" id="preTilePreview">
+            <svg width="36" height="36" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" style="margin-bottom:8px;"><rect x="3" y="3" width="18" height="18" rx="2"/><circle cx="8.5" cy="8.5" r="1.5"/><path d="M21 15l-5-5L5 21"/></svg>
+            <span>Pre-loaded Sector Baseline: xBD houston-east (no custom T0 file selected yet)</span>
+          </div>
+          <span style="font-size:11px; color:var(--accent-cyan);">Click or drop optical tile (.png / .jpg / .tif)</span>
+          <input type="file" id="preImgInput" accept="image/*,.png,.jpg,.jpeg,.tif,.tiff" style="display:none;" onchange="handleTileUpload('pre')">
+        </div>
+
+        <div class="upload-tile-dropzone" id="postDropZone" onclick="document.getElementById('postImgInput').click()">
+          <span class="upload-tile-badge" style="background:rgba(239,68,68,0.15); color:#f87171;">POST-DISASTER SATELLITE TILE (T1)</span>
+          <div class="upload-tile-preview" id="postTilePreview">
+            <svg width="36" height="36" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" style="margin-bottom:8px;"><rect x="3" y="3" width="18" height="18" rx="2"/><path d="M14 9l-6 6M8 9l6 6"/></svg>
+            <span>Pre-loaded Sector Baseline: xBD houston-east (no custom T1 file selected yet)</span>
+          </div>
+          <span style="font-size:11px; color:var(--accent-rose);">Click or drop post-event tile (.png / .jpg / .tif)</span>
+          <input type="file" id="postImgInput" accept="image/*,.png,.jpg,.jpeg,.tif,.tiff" style="display:none;" onchange="handleTileUpload('post')">
+        </div>
+      </div>
+
+      <div style="background:var(--bg-card-shell); border:1px solid var(--border-medium); border-radius:10px; padding:18px; margin-top:20px;">
+        <div style="display:flex; justify-content:space-between; align-items:center; gap:10px; flex-wrap:wrap;">
+          <div>
+            <div style="font-weight:700; color:var(--text-bright);">SECTOR RUNTIME CONFIGURATION</div>
+            <div style="font-size:11px; color:var(--text-dim);">Target: xBD houston-east • Model: ResNet-18 U-Net (unet_resnet18_best.pth, 6-ch pre+post)</div>
+          </div>
+          <div style="display:flex; gap:8px; flex-wrap:wrap;">
+            <button type="button" class="btn btn-secondary" id="btnLoadDatasetSample" style="padding:10px 16px; font-size:11.5px;">
+              <span>LOAD DATASET SAMPLE (T0 + T1)</span>
+            </button>
+            <button class="btn btn-sim" id="btnTriggerAssessment" onclick="triggerDamageAssessment()" style="padding:10px 24px; font-size:12px;">
+              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M22 12h-4l-3 9L9 3l-3 9H2"/></svg>
+              <span>TRIGGER DAMAGE ASSESSMENT (POST /api/assessment/upload)</span>
+            </button>
+          </div>
+        </div>
+
+        <div id="assessmentProgressWrap" style="display:none; margin-top:16px;">
+          <div style="display:flex; justify-content:space-between; font-size:11px; font-family:var(--font-mono); margin-bottom:6px;">
+            <span id="assessmentStepText" style="color:var(--accent-cyan);">Running Bi-Temporal ResNet-18 U-Net &amp; Grad-CAM...</span>
+            <span id="assessmentPctText" style="color:var(--accent-cyan);">0%</span>
+          </div>
+          <div style="height:6px; background:#0f172a; border-radius:3px; overflow:hidden;">
+            <div id="assessmentProgressBar" style="height:100%; width:0%; background:linear-gradient(90deg, #00e5ff, #c084fc); transition:width 0.3s;"></div>
+          </div>
+        </div>
+
+        <div id="assessmentResultsCard" style="display:none; margin-top:16px; background:#070d18; border:1px solid var(--accent-emerald); border-radius:8px; padding:14px;">
+          <div style="display:flex; justify-content:space-between; align-items:center;">
+            <div>
+              <div id="assessmentResultsTitle" style="color:var(--accent-emerald); font-weight:700; font-size:12px;">✓ DAMAGE ASSESSMENT QUEUED</div>
+              <div id="assessmentResultsSummary" style="font-size:11px; color:var(--text-muted); margin-top:2px;">
+                Awaiting sector status...
+              </div>
+            </div>
+            <button type="button" class="btn btn-secondary" onclick="switchScreen('screen-map')" style="background:var(--accent-emerald); color:#000; font-weight:700;">
+              VIEW TACTICAL MAP →
+            </button>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- =========================================================================
+       SCREEN 3: ROUTE DETAIL PANEL (EXPLANATION, SHAP BAR CHART, UNCERTAINTY, APPROVE/REJECT)
+       ========================================================================= -->
+  <div class="screen-view" id="screenRouteView">
+    <div style="max-width:1100px; margin:0 auto; width:100%;">
+      <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:18px;">
+        <div>
+          <h2 style="font-size:18px; font-weight:800; color:var(--text-bright); text-transform:uppercase;">
+            Screen 3: Tactical Route Detail & Explainable AI (SHAP & GTF)
+          </h2>
+          <p style="font-size:12px; color:var(--text-muted); margin-top:4px;">
+            Ground-Truth-First LLM Briefing, PPO Routing Attribution, and Commander Decision Gate
+          </p>
+        </div>
+        <div style="display:flex; gap:8px;">
+          <button class="btn btn-secondary" onclick="switchScreen('screen-map')">← RETURN TO MAP</button>
+        </div>
+      </div>
+
+      <div class="plain-explainer-banner">
+        <strong>What happens on Screen 3:</strong> Before a commander approves dispatch, the system explains <strong>why</strong> this route was chosen, proves with the <strong>GTF Gate</strong> that no fake ETA or non-existent road was hallucinated, and shows the <strong>SHAP chart</strong> ranking which road factors mattered most.
+      </div>
+
+      <div class="detail-screen-layout">
+        <!-- Left: Route Summary & Narrative -->
+        <div style="background:var(--bg-card-shell); border:1px solid var(--border-medium); border-radius:12px; padding:20px;">
+          <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:12px; gap:8px; flex-wrap:wrap;">
+            <div style="font-weight:700; color:var(--text-bright); font-size:13px;" id="s3RouteHeader">ROUTE PLAN: PLAN-BASELINE-01</div>
+            <div style="display:flex; gap:6px; flex-wrap:wrap;">
+              <span class="badge-pill" style="background:rgba(16,185,129,0.15); color:#34d399;" id="s3ValidationBadge">GTF GATE: PASSED</span>
+              <span class="badge-pill" style="background:rgba(245,158,11,0.15); color:#fbbf24;" id="s3ApprovalStatusBadge">PENDING_APPROVAL</span>
+              <span class="badge-pill" style="background:rgba(0,229,255,0.15); color:var(--accent-cyan);" id="s3UncertaintyBadge">±0.08 SYSTEM UNCERTAINTY</span>
+            </div>
+          </div>
+
+          <div style="background:var(--bg-card-inner); border:1px solid var(--border-subtle); border-radius:8px; padding:14px; margin-bottom:16px;">
+            <div style="font-size:11px; font-weight:700; color:var(--accent-cyan); margin-bottom:6px; text-transform:uppercase;">
+              GTF-Constrained Operational Explanation (Portion 3):
+            </div>
+            <div style="font-size:12px; line-height:1.5; color:var(--text-primary);" id="s3NarrativeText">
+              Route MED-01 follows high-ground arterial E-01 and bypasses the Buffalo Bayou chokepoint (E-03) where flood depth reaches 0.62m. Safety mask successfully rerouted unit with an ETA of 810 seconds.
+            </div>
+          </div>
+
+          <div style="display:flex; flex-direction:column; gap:8px; font-size:11.5px; margin-bottom:20px;">
+            <div style="display:flex; justify-content:space-between; padding:6px 10px; background:rgba(255,255,255,0.02); border-radius:4px;">
+              <span style="color:var(--text-muted);">PPO Proposed Path:</span>
+              <span style="color:var(--accent-rose); font-family:var(--font-mono);">Pre-Mask Proposal (Dashed Line on Map)</span>
+            </div>
+            <div style="display:flex; justify-content:space-between; padding:6px 10px; background:rgba(255,255,255,0.02); border-radius:4px;">
+              <span style="color:var(--text-muted);">CSP Safety-Filtered Path:</span>
+              <span style="color:var(--accent-cyan); font-family:var(--font-mono);">Safe Dispatched Route (Solid Line on Map)</span>
+            </div>
+            <div style="display:flex; justify-content:space-between; padding:6px 10px; background:rgba(255,255,255,0.02); border-radius:4px;">
+              <span style="color:var(--text-muted);">Safety Filter Altered Path:</span>
+              <span style="color:var(--accent-emerald); font-family:var(--font-mono);" id="s3MaskAlteredText">YES (Submerged Chokepoint E-03 Avoided)</span>
+            </div>
+          </div>
+
+          <!-- Approve and Reject Decision Buttons -->
+          <div style="display:grid; grid-template-columns:1fr 1fr; gap:12px;">
+            <button type="button" class="btn btn-approve" id="s3ApproveBtn" onclick="commanderDecisionAction('approve')" style="padding:12px; font-size:12px;">
+              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><polyline points="20 6 9 17 4 12"></polyline></svg>
+              <span>APPROVE ROUTE</span>
+            </button>
+            <button type="button" class="btn" id="s3RejectBtn" onclick="commanderDecisionAction('reject')" style="background:rgba(239,68,68,0.2); border:1px solid rgba(239,68,68,0.5); color:#f87171; padding:12px; font-size:12px;">
+              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><line x1="18" y1="6" x2="6" y2="18"></line><line x1="6" y1="6" x2="18" y2="18"></line></svg>
+              <span>REJECT ROUTE</span>
+            </button>
+          </div>
+        </div>
+
+        <!-- Right: Dynamic SHAP Bar Chart -->
+        <div style="background:var(--bg-card-shell); border:1px solid var(--border-medium); border-radius:12px; padding:20px;">
+          <div style="font-weight:700; color:var(--text-bright); font-size:13px; margin-bottom:6px;">
+            ROUTING FEATURE ATTRIBUTIONS (SHAP)
+          </div>
+          <p style="font-size:11px; color:var(--text-muted); margin-bottom:16px;">
+            Game-theoretic credit assignment for PPO routing decision factors
+          </p>
+
+          <div id="s3ShapMetersGroup" style="display:flex; flex-direction:column; gap:12px;">
+            <!-- Populated dynamically with renderShapBars -->
+          </div>
+
+          <div style="margin-top:16px; border-top:1px solid var(--border-subtle); padding-top:12px;">
+            <div style="font-size:10.5px; font-weight:700; color:var(--text-muted); text-transform:uppercase; margin-bottom:8px;">
+              Counterfactual Alternatives (Pre-Mask vs. Safety Detour):
+            </div>
+            <div id="s3CounterfactualsList" style="display:flex; flex-direction:column; gap:6px; font-family:var(--font-mono); font-size:11px; color:var(--text-primary);"></div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- =========================================================================
+       SCREEN 4: BUILDING DETAIL PANEL (GRAD-CAM IMAGE, CONFIDENCE, CORRECTION DROPDOWN)
+       ========================================================================= -->
+  <div class="screen-view" id="screenBuildingView">
+    <div style="max-width:1100px; margin:0 auto; width:100%;">
+      <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:18px;">
+        <div>
+          <h2 style="font-size:18px; font-weight:800; color:var(--text-bright); text-transform:uppercase;">
+            Screen 4: Building Damage Inspection & Grad-CAM Spatial Attribution
+          </h2>
+          <p style="font-size:12px; color:var(--text-muted); margin-top:4px;">
+            Pixel-Level Convolutional Gradient Overlay, Bayesian Confidence, and Active Learning Feedback Loop
+          </p>
+        </div>
+          <div style="display:flex; gap:8px; align-items:center; flex-wrap:wrap;">
+          <select id="s4BuildingSelector" onchange="populateScreenBuildingData(this.value)" style="background:var(--bg-header); border:1px solid var(--border-medium); color:var(--accent-cyan); padding:7px 10px; border-radius:6px; font-family:var(--font-mono); font-size:11.5px;">
+            <option value="BLD-0042">BLD-0042</option>
+          </select>
+          <button type="button" class="btn btn-sim" onclick="inspectNextActiveLearningCandidate()" title="Pick the highest-priority uncertain &amp; diverse building from Portion 4 active learning queue">🎯 NEXT UNCERTAIN</button>
+          <button class="btn btn-secondary" onclick="switchScreen('screen-map')">← RETURN TO MAP</button>
+        </div>
+      </div>
+
+      <div class="plain-explainer-banner">
+        <strong>What happens on Screen 4:</strong> The heatmap shows <strong>which pixels</strong> inside a building footprint caused the AI's damage label (red/yellow = highest focus). When confidence drops below <strong>65%</strong> (purple ring on the map), responders use the 1-tap buttons on the right to <strong>Confirm</strong>, <strong>Correct</strong>, or <strong>Skip</strong>—updating the map immediately and queuing feedback for Portion 4 retraining.
+      </div>
+
+      <div class="detail-screen-layout">
+        <!-- Left: Grad-CAM Canvas & Visual Attribution -->
+        <div style="background:var(--bg-card-shell); border:1px solid var(--border-medium); border-radius:12px; padding:20px;">
+          <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:12px; gap:8px; flex-wrap:wrap;">
+            <div style="font-weight:700; color:var(--text-bright); font-size:13px;" id="s4BuildingTitle">BUILDING: BLD-0042</div>
+            <div style="display:flex; gap:6px; align-items:center;">
+              <span class="badge-pill" style="background:rgba(0,229,255,0.15); color:var(--accent-cyan);" id="s4UncertaintyBadge">±0.05 UNCERTAINTY</span>
+              <span class="badge-pill" style="background:rgba(239,68,68,0.2); color:#f87171;" id="s4DamageBadge">MAJOR DAMAGE</span>
+            </div>
+          </div>
+
+          <div class="gradcam-viewbox">
+            <canvas id="gradcamCanvas" width="480" height="260" class="gradcam-canvas"></canvas>
+            <div style="position:absolute; bottom:8px; right:8px; background:rgba(0,0,0,0.7); padding:3px 8px; border-radius:4px; font-family:var(--font-mono); font-size:9.5px; color:#38bdf8;">
+              GRAD-CAM ATTRIBUTION OVERLAY (Decoder Layer)
+            </div>
+          </div>
+
+          <div id="s4EmbeddingRef" style="margin-top:8px; font-family:var(--font-mono); font-size:10px; color:var(--accent-purple);">
+            Embedding Ref: emb://dinov2/houston/BLD-0042
+          </div>
+          <div id="s4AdapterVersion" style="margin-top:4px; font-family:var(--font-mono); font-size:10px; color:var(--accent-cyan);">
+            Active Adapter: BASE (none)
+          </div>
+          <div id="s4ExplanationText" style="margin-top:8px; font-size:11px; color:var(--text-muted);">
+            High-intensity red/yellow heatmap highlights localized structural damage regions from decoder Grad-CAM activations.
+          </div>
+        </div>
+
+        <!-- Right: Bayesian Calibration & Correction Dropdown -->
+        <div style="background:var(--bg-card-shell); border:1px solid var(--border-medium); border-radius:12px; padding:20px;">
+          <div style="font-weight:700; color:var(--text-bright); font-size:13px; margin-bottom:12px;">
+            UNCERTAINTY CALIBRATION &amp; RESPONDER LABELING (PORTION 3 &amp; 4)
+          </div>
+
+          <div style="background:var(--bg-card-inner); border:1px solid var(--border-subtle); border-radius:8px; padding:14px; margin-bottom:18px;">
+            <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:8px;">
+              <span style="font-size:11px; color:var(--text-muted);">Bayesian Calibrated Confidence:</span>
+              <span style="font-family:var(--font-mono); font-weight:700; color:var(--accent-cyan); font-size:13px;" id="s4ConfidenceVal">89.4% (CALIBRATED)</span>
+            </div>
+            <div style="height:6px; background:#0f172a; border-radius:3px; overflow:hidden;">
+              <div id="s4ConfidenceBar" style="height:100%; width:89.4%; background:var(--accent-cyan);"></div>
+            </div>
+            <div style="font-size:10px; color:var(--text-dim); margin-top:6px;">
+              Temperature scaled (T = 1.28). Samples under 65% are flagged with hovering purple beacons for field inspection.
+            </div>
+          </div>
+
+          <div class="s4-p4-panel" id="s4Portion4Panel">
+            <div class="s4-p4-header">
+              <span class="s4-p4-title">PORTION 4: DRIFT, REPLAY &amp; SAFETY MONITOR</span>
+              <div style="display:flex; align-items:center; gap:6px;">
+                <span class="tour-status-pill live" id="s4P4SignalPill">OPERATIONAL ACTIVE</span>
+                <button type="button" class="btn-p4-footer-trigger" id="btnS4AdaptNow" title="Train &amp; safety-gate Tier A PyTorch adapter on responder feedback">ADAPT ⚡</button>
+                <button type="button" class="btn-p4-footer-trigger" id="btnS4OpenP4Modal" title="Open detailed Portion 4 drift breakdown &amp; rollback controls">INSPECT ↗</button>
+              </div>
+            </div>
+            <div class="s4-p4-grid">
+              <div class="s4-p4-metric">
+                <div class="s4-p4-metric-label">DRIFT MONITOR</div>
+                <div class="s4-p4-metric-val" id="s4P4DriftVal">0.000 (NORMAL)</div>
+              </div>
+              <div class="s4-p4-metric">
+                <div class="s4-p4-metric-label">DUAL REPLAY BUFFER</div>
+                <div class="s4-p4-metric-val" id="s4P4ReplayVal">0 LT / 0 REC</div>
+              </div>
+              <div class="s4-p4-metric">
+                <div class="s4-p4-metric-label">2ND-OPINION QUEUE</div>
+                <div class="s4-p4-metric-val" id="s4P4SecondOpinionVal">0 FLAGGED</div>
+              </div>
+              <div class="s4-p4-metric">
+                <div class="s4-p4-metric-label">ADAPTATION SCOPE</div>
+                <div class="s4-p4-metric-val" id="s4P4ScopeVal">SEG-ONLY (MARL SAFE)</div>
+              </div>
+            </div>
+          </div>
+
+          <div style="background:rgba(255,255,255,0.02); border:1px solid var(--border-subtle); border-radius:8px; padding:14px; margin-bottom:16px;">
+            <label for="s4CorrectionSelect" style="display:block; font-size:11px; font-weight:700; color:var(--text-bright); margin-bottom:8px;">
+              FIELD RESPONDER CORRECTION DROPDOWN (1-TAP ACTIVE LEARNING):
+            </label>
+            <select id="s4CorrectionSelect" style="width:100%; background:var(--bg-header); border:1px solid var(--border-medium); color:var(--text-bright); padding:10px; border-radius:6px; font-family:var(--font-mono); font-size:12px;">
+              <option value="no_damage">Class 0: No Damage (Structurally Sound)</option>
+              <option value="minor">Class 1: Minor Damage (Habitable)</option>
+              <option value="major" selected>Class 2: Major Damage (Severe Structural Hazard)</option>
+              <option value="destroyed">Class 3: Destroyed (Collapsed Rubble Slab)</option>
+            </select>
+            <div class="p4-inline-hint" id="s4CorrectHint">
+              Pick a different class before clicking CORRECT (changes &gt;= 2 tiers flag a second opinion).
+            </div>
+            <div style="font-size:10.5px; color:var(--text-dim); margin-top:6px;">
+              Confirm or Skip queues directly to <code>POST /api/feedback</code>; Correct updates the building label via <code>POST /api/buildings/{id}/correct</code>.
+            </div>
+            <div id="s4SecondOpinionBanner" style="display:none; margin-top:8px; padding:8px 10px; border-radius:6px; background:rgba(245,158,11,0.12); border:1px solid rgba(245,158,11,0.35); color:#fbbf24; font-size:10.5px; font-family:var(--font-mono);">
+              Second opinion recommended for &gt;=2 damage-tier label change.
+            </div>
+          </div>
+
+          <div style="display:grid; grid-template-columns:1fr 1.4fr 0.8fr; gap:8px;">
+            <button type="button" class="btn btn-approve" onclick="submitBuildingFeedback('confirm')" style="padding:11px 8px; font-size:11.5px;">
+              <span>✓ CONFIRM</span>
+            </button>
+            <button type="button" class="btn btn-sim" onclick="submitFieldCorrection()" style="padding:11px 8px; font-size:11.5px;">
+              <span>✎ CORRECT</span>
+            </button>
+            <button type="button" class="btn btn-secondary" onclick="submitBuildingFeedback('skip')" style="padding:11px 8px; font-size:11.5px;">
+              <span>↷ SKIP</span>
+            </button>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- =========================================================================
+       SCREEN 5: APPROVAL CONFIRMATION MODAL (SHOWING SHA-256 AUDIT HASH)
+       ========================================================================= -->
+  <div class="modal-overlay" id="screenApprovalModal">
+    <div class="modal-box">
+      <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:16px;">
+        <div style="display:flex; align-items:center; gap:8px;">
+          <div style="width:10px; height:10px; border-radius:50%; background:var(--accent-emerald); box-shadow:0 0 10px var(--accent-emerald);"></div>
+          <span style="font-weight:800; font-size:14px; color:var(--text-bright); text-transform:uppercase;" id="modalDecisionTitle">
+            COMMANDER APPROVAL GATE: ROUTE DISPATCH SEALED
+          </span>
+        </div>
+        <button onclick="closeApprovalModal()" style="background:transparent; border:none; color:var(--text-muted); cursor:pointer; font-size:18px;">&times;</button>
+      </div>
+
+      <div style="font-size:12px; color:var(--text-primary); margin-bottom:14px;" id="modalDecisionDesc">
+        Incident Commander authorized route deployment. An immutable cryptographic record has been written to the SHA-256 audit log.
+      </div>
+
+      <div style="background:#050912; border:1px solid var(--border-medium); border-radius:8px; padding:14px; margin-bottom:16px;">
+        <div style="font-size:10px; color:var(--text-muted); font-family:var(--font-mono); margin-bottom:4px;">
+          CRYPTOGRAPHIC SHA-256 ENTRY DIGEST (TAMPER-EVIDENT):
+        </div>
+        <div class="hash-display-pill" id="modalAuditHashVal">
+          -- AWAITING DECISION / AUDIT SYNC --
+        </div>
+
+        <div style="display:flex; justify-content:space-between; font-size:10.5px; font-family:var(--font-mono); margin-top:8px;">
+          <span style="color:var(--text-dim);">PREV HASH LINK:</span>
+          <span style="color:#94a3b8;" id="modalPrevHashVal">--</span>
+        </div>
+      </div>
+
+      <div class="plain-explainer-banner compact" style="margin-bottom:12px;">
+        <strong>Why this modal exists:</strong> Every commander approval or rejection is sealed like a digital chain—each new SHA-256 fingerprint mathematically includes the previous entry's hash so nobody can secretly alter past records.
+      </div>
+
+      <div style="font-size:10.5px; font-family:var(--font-mono); color:var(--accent-cyan); margin-bottom:18px;">
+        Formula: SHA-256(prev_hash + route_id + action + actor + timestamp)<br>
+        Merkle Hash Chain Integrity: VERIFIED INTACT (100% Zero Tampering)
+      </div>
+
+      <div style="display:flex; justify-content:flex-end; gap:10px;">
+        <button class="btn btn-secondary" onclick="closeApprovalModal()">CLOSE</button>
+        <button class="btn btn-sim" onclick="switchScreen('screen-map'); closeApprovalModal();">VIEW ROUTE ON MAP</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- =========================================================================
+       PORTION 4 MONITOR MODAL (DRIFT, DUAL REPLAY, 5-CHECK GATE & ROLLBACK)
+       ========================================================================= -->
+  <div class="modal-overlay" id="portion4MonitorModal" role="dialog" aria-modal="true" aria-labelledby="portion4ModalTitle">
+    <div class="modal-box tour-modal-box">
+      <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:12px; gap:12px;">
+        <div>
+          <div style="font-weight:800; font-size:15px; color:var(--text-bright); text-transform:uppercase;" id="portion4ModalTitle">
+            PORTION 4 TELEMETRY: DRIFT, REPLAY &amp; SAFETY-GATED ADAPTATION
+          </div>
+          <div style="font-size:11.5px; color:var(--text-muted); margin-top:2px;">
+            Live status from <code>/api/adaptation/drift</code> &amp; <code>/api/adaptation/status</code> (segmentation-only; MARL routing isolated).
+          </div>
+        </div>
+        <button type="button" id="btnCloseP4Modal" aria-label="Close Portion 4 monitor" style="background:transparent; border:none; color:var(--text-muted); cursor:pointer; font-size:22px; line-height:1;">&times;</button>
+      </div>
+
+      <div class="tour-step-grid">
+        <div class="tour-step-card">
+          <div class="tour-step-head">
+            <div class="tour-step-title">
+              <span class="tour-step-num">D</span>
+              <span>Multi-Signal Drift Monitor</span>
+            </div>
+            <span class="tour-status-pill live" id="p4ModalDriftPill">NORMAL</span>
+          </div>
+          <div class="p4-kv-list">
+            <span class="p4-kv-key">Combined Distance</span><span class="p4-kv-val" id="p4ModalDriftDist">0.000</span>
+            <span class="p4-kv-key">Thresholds (Soft / Hard)</span><span class="p4-kv-val" id="p4ModalDriftThresholds">0.08 / 0.15</span>
+            <span class="p4-kv-key">Class JSD Shift</span><span class="p4-kv-val" id="p4ModalClassJsd">0.000</span>
+            <span class="p4-kv-key">Mean Uncertainty</span><span class="p4-kv-val" id="p4ModalMeanUnc">0.000</span>
+            <span class="p4-kv-key">Correction Rate (Shrunk)</span><span class="p4-kv-val" id="p4ModalCorrRate">0.000</span>
+            <span class="p4-kv-key">Embedding MMD2</span><span class="p4-kv-val" id="p4ModalEmbAvail">OPERATIONAL ONLY</span>
+          </div>
+          <div class="p4-inline-hint" id="p4ModalEmbReason"></div>
+        </div>
+
+        <div class="tour-step-card">
+          <div class="tour-step-head">
+            <div class="tour-step-title">
+              <span class="tour-step-num">R</span>
+              <span>Non-FIFO Dual Replay &amp; Queue</span>
+            </div>
+            <span class="tour-status-pill live" id="p4ModalReplayPill">SQLITE WAL</span>
+          </div>
+          <div class="p4-kv-list">
+            <span class="p4-kv-key">Long-Term Reservoir</span><span class="p4-kv-val" id="p4ModalLtCount">0 samples</span>
+            <span class="p4-kv-key">Recent Buffer</span><span class="p4-kv-val" id="p4ModalRecCount">0 samples</span>
+            <span class="p4-kv-key">Total Feedback Logged</span><span class="p4-kv-val" id="p4ModalTotalFb">0</span>
+            <span class="p4-kv-key">2nd-Opinion Flags</span><span class="p4-kv-val" id="p4ModalSecondOp">0</span>
+            <span class="p4-kv-key">Active Model</span><span class="p4-kv-val" id="p4ModalModelVer">ResNet18-UNet-xBD-v1.0</span>
+            <span class="p4-kv-key">Active Adapter</span><span class="p4-kv-val" id="p4ModalAdapterVer">BASE (none)</span>
+          </div>
+          <div class="p4-gate-row" id="p4ModalDisastersWrap"></div>
+        </div>
+
+        <div class="tour-step-card full-span">
+          <div class="tour-step-head">
+            <div class="tour-step-title">
+              <span class="tour-step-num">G</span>
+              <span>5-Check Safety Gate &amp; Adapter Controls</span>
+            </div>
+            <span class="tour-status-pill live" id="p4ModalScopePill">SEGMENTATION_ONLY</span>
+          </div>
+          <div class="p4-inline-hint" id="p4ModalLastRunSummary">No adaptation runs recorded yet in current database.</div>
+          <div class="p4-inline-hint" id="p4ModalTrainMetrics">Click TRAIN &amp; ADAPT MODEL (TIER A) to fine-tune the frozen-encoder ResNet-18 adapter head on responder-verified labels and run all 5 safety checks.</div>
+          <div class="p4-gate-row" id="p4ModalGateChecksWrap"></div>
+          <div style="display:flex; justify-content:flex-end; gap:8px; margin-top:10px; flex-wrap:wrap;">
+            <button type="button" class="btn btn-approve" id="btnP4RunAdaptation">⚡ TRAIN &amp; ADAPT MODEL (TIER A)</button>
+            <button type="button" class="btn btn-secondary" id="btnP4Refresh">REFRESH TELEMETRY</button>
+            <button type="button" class="btn btn-sim" id="btnP4Rollback">ROLLBACK ADAPTER TO BASE</button>
+            <button type="button" class="btn btn-secondary" id="btnCloseP4Footer">CLOSE</button>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- =========================================================================
+       INTERACTIVE PROJECT TOUR & EXPLAINER MODAL (5-PORTION WALKTHROUGH)
+       ========================================================================= -->
+  <div class="modal-overlay" id="projectTourModal" role="dialog" aria-modal="true" aria-labelledby="projectTourTitle">
+    <div class="modal-box tour-modal-box">
+      <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:12px; gap:12px;">
+        <div>
+          <div style="font-weight:800; font-size:15px; color:var(--text-bright); text-transform:uppercase;" id="projectTourTitle">
+            HOW THIS DISASTER RESPONSE SYSTEM WORKS (5-STEP WALKTHROUGH)
+          </div>
+          <div style="font-size:11.5px; color:var(--text-muted); margin-top:2px;">
+            From raw satellite photos to safe rescue routes, responder feedback, and a tamper-proof commander audit log.
+          </div>
+        </div>
+        <button type="button" id="btnCloseTourModal" aria-label="Close project walkthrough" style="background:transparent; border:none; color:var(--text-muted); cursor:pointer; font-size:22px; line-height:1;">&times;</button>
+      </div>
+
+      <div class="tour-step-grid">
+        <div class="tour-step-card">
+          <div class="tour-step-head">
+            <div class="tour-step-title">
+              <span class="tour-step-num">1</span>
+              <span>Satellite Damage Scan (Portion 1: Ammar)</span>
+            </div>
+            <span class="tour-status-pill live">P1 ACTIVE (RESNET-18 UNET)</span>
+          </div>
+          <div class="tour-step-desc">
+            Compares <strong>Before (T0)</strong> and <strong>After (T1)</strong> satellite tiles to classify 220 buildings (<em>No Damage, Minor, Major, Destroyed</em>). Buildings with AI confidence <strong>&lt; 65%</strong> are flagged with <strong>purple dashed rings</strong> so humans check them first.
+          </div>
+          <div class="tour-step-actions">
+            <button type="button" class="btn-quick-sample" data-tour-action="screen-upload">Open Screen 1 (Upload) →</button>
+          </div>
+        </div>
+
+        <div class="tour-step-card">
+          <div class="tour-step-head">
+            <div class="tour-step-title">
+              <span class="tour-step-num">2</span>
+              <span>Two-Line Tactical Map (Portion 2 &amp; 5)</span>
+            </div>
+            <span class="tour-status-pill live">MAP + MARL ROUTING LIVE</span>
+          </div>
+          <div class="tour-step-desc">
+            Plots all 220 buildings, 26 arterial roads (<em>Green = Open, Amber = Hazardous, Red = Blocked</em>; 0 roads start blocked by default), and 3 live emergency units. Click any road to open/close it, or simulate live satellite blockages; <strong>Dashed rose</strong> = pre-mask PPO proposal, <strong>Solid cyan</strong> = safety-masked route.
+          </div>
+          <div class="tour-step-actions">
+            <button type="button" class="btn-quick-sample purple" data-tour-action="inspect-purple">Inspect Purple Building →</button>
+            <button type="button" class="btn-quick-sample" data-tour-action="inspect-bridge">Inspect Blocked Bridge →</button>
+            <button type="button" class="btn-quick-sample" data-tour-action="tab-sim">Try Flood Surge →</button>
+          </div>
+        </div>
+
+        <div class="tour-step-card">
+          <div class="tour-step-head">
+            <div class="tour-step-title">
+              <span class="tour-step-num">3</span>
+              <span>Explainable Route &amp; GTF Gate (Portion 3 &amp; 5)</span>
+            </div>
+            <span class="tour-status-pill live">LIVE VALIDATION GATE</span>
+          </div>
+          <div class="tour-step-desc">
+            Shows a plain-language route briefing plus a <strong>7-factor SHAP bar chart</strong> proving why the detour was picked (e.g., <em>Hazard Distance</em> vs. <em>Travel Time</em>). Portion 5's <strong>GTF Gate</strong> checks ETAs and road IDs and falls back to a safe template if an LLM hallucinates.
+          </div>
+          <div class="tour-step-actions">
+            <button type="button" class="btn-quick-sample" data-tour-action="screen-route">Open Screen 3 (Route &amp; SHAP) →</button>
+          </div>
+        </div>
+
+        <div class="tour-step-card">
+          <div class="tour-step-head">
+            <div class="tour-step-title">
+              <span class="tour-step-num">4</span>
+              <span>Grad-CAM &amp; 1-Tap Feedback (Portion 3 &amp; 4)</span>
+            </div>
+            <span class="tour-status-pill live">LIVE SQLITE WAL QUEUE</span>
+          </div>
+          <div class="tour-step-desc">
+            Draws a <strong>Grad-CAM heatmap</strong> over any building showing which pixels triggered the damage score. Responders tap <strong>Confirm</strong>, <strong>Correct</strong>, or <strong>Skip</strong> to update the map immediately and feed Portion 4's active-learning drift monitor.
+          </div>
+          <div class="tour-step-actions">
+            <button type="button" class="btn-quick-sample" data-tour-action="screen-building">Open Screen 4 (Grad-CAM) →</button>
+          </div>
+        </div>
+
+        <div class="tour-step-card full-span">
+          <div class="tour-step-head">
+            <div class="tour-step-title">
+              <span class="tour-step-num">5</span>
+              <span>Commander Approval Gate &amp; SHA-256 Audit Chain (Portion 5: Ahmed)</span>
+            </div>
+            <span class="tour-status-pill live">LIVE CRYPTOGRAPHIC LEDGER</span>
+          </div>
+          <div class="tour-step-desc">
+            No AI route dispatches automatically—the Incident Commander must click <strong>Approve</strong> or <strong>Reject</strong>. Each decision locks the plan (<code>409 Conflict</code> if re-clicked) and writes a tamper-evident <strong>SHA-256 hash</strong> chained to every prior event, while Screen 6 monitors fleet, GeoJSON size (<code>&lt;100KB</code>), drift, and audit health at the bottom.
+          </div>
+          <div class="tour-step-actions">
+            <button type="button" class="btn-quick-sample" data-tour-action="modal-audit">Inspect Live Audit Seal (Screen 5) →</button>
+          </div>
+        </div>
+      </div>
+
+      <div class="tour-stub-legend">
+        <strong>Integration Status:</strong> All 5 Portions are live and integrated: Portion 1 (<code>damage/assess.py</code>) runs pretrained ResNet-18 U-Net assessment on Screen 1, Portion 2 (<code>routing/generate.py</code>) runs PPO + safety-mask dispatch (&lt; 500ms), Portion 3 (<code>explain/</code>) runs Grad-CAM heatmap overlays, 7-feature KernelSHAP, and Section 7 GTF-validated Mistral-7B narration, Portion 4 (<code>feedback/</code>) monitors drift, active learning, dual-buffer replay &amp; safety-gated adapters, and Portion 5 (<code>main.py</code>) enforces validation gates and SHA-256 audit sealing.
+      </div>
+
+      <div style="display:flex; justify-content:flex-end;">
+        <button type="button" class="btn btn-sim" id="btnCloseTourFooter">GOT IT — EXPLORE CONSOLE</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- Bottom Keyboard Shortcuts Strip -->
+  
+  <!-- SCREEN 6: PERSISTENT TACTICAL TELEMETRY FOOTER (workflow/ahmed.pdf: drift distance & feedback count) -->
+  <div class="shortcuts-footer" id="screenStatusFooter">
+    <div class="telemetry-strip">
+      <span class="telemetry-tag" style="border-color:var(--accent-cyan); color:var(--accent-cyan);" title="Screen 6: Always-on system telemetry bar">
+        <span class="dot" style="display:inline-block; width:5px; height:5px; border-radius:50%; background:currentColor; margin-right:4px;"></span>
+        SCREEN 6 STATUS FOOTER
+      </span>
+      <span title="Measures whether field responder corrections show the Vision AI drifting away from Houston-East baseline (>=0.08 soft warning, >=0.15 triggers retraining)">DRIFT DISTANCE: <span class="telemetry-badge-val" id="statusDriftVal">0.000</span> <span class="badge-pill" style="font-size:9px; padding:1px 5px; background:rgba(16,185,129,0.15); color:#34d399;" id="statusDriftBadge">NORMAL (&lt;0.08)</span></span>
+      <span style="color:var(--border-medium);">|</span>
+      <span title="Number of responder Confirm/Correct/Skip labels saved offline in SQLite WAL for Portion 4 active learning">FEEDBACK QUEUE: <span class="telemetry-badge-val" id="statusFeedbackCount">-- QUEUED</span></span>
+      <span style="color:var(--border-medium);">|</span>
+      <span title="Active segmentation adapter promoted through Portion 4 five-check safety gate">ADAPTER: <span class="telemetry-badge-val" id="statusAdapterVal">BASE (none)</span></span>
+      <button type="button" class="btn-p4-footer-trigger" id="btnScreen6P4Inspect" title="Open Portion 4 Drift, Replay &amp; Safety Gate monitor">P4 TELEMETRY ↗</button>
+      <span style="color:var(--border-medium);">|</span>
+      <span title="Three dispatched emergency units animated on the map: MED-01, TRN-01, RSC-01">ACTIVE FLEET: <span class="telemetry-badge-val">3 UNITS</span></span>
+      <span style="color:var(--border-medium);">|</span>
+      <span title="Total map vector payload size sent by /api/state (kept under 100 KB for fast offline edge rendering)">GEOJSON: <span class="telemetry-badge-val" id="hudGeoJsonKbVal" style="font-variant-numeric:tabular-nums;">-- KB (&lt;100KB)</span></span>
+      <span style="color:var(--border-medium);">|</span>
+      <span title="Live verification of the SHA-256 hash chain across all commander, assessment, and labeling events">AUDIT LEDGER: <span style="color:var(--accent-emerald);" id="statusAuditValidity">SHA-256 CHAIN INTACT</span></span>
+    </div>
+    <div id="footerStatusText" style="font-family:var(--font-mono); font-size:10px; color:var(--text-dim);">
+      EDGE WEB ARCHITECTURE 100% OPERATIONAL (OFFLINE-FIRST)
+    </div>
+  </div>
+
+
+  <!-- Offline Leaflet v1.9.4 Map Engine + Tactical Console Controller -->
+  <script src="/static/leaflet.js"></script>
+  <script src="/static/app.js"></script>
+</body>
+</html>

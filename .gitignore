@@ -1,0 +1,57 @@
+# Python bytecode & caches
+__pycache__/
+*.py[cod]
+*$py.class
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+
+# Virtual environments & secrets
+.venv/
+venv/
+env/
+.env
+
+# Build artifacts & archives
+build/
+dist/
+.web_cache/
+*.zip
+
+# SQLite databases & temporary WAL sidecars (keep data/poc_mission.db for Day-1 run)
+db.sqlite
+db.sqlite-*
+data/*.db-shm
+data/*.db-wal
+
+# Teammate large datasets, artifacts, embeddings & model weights
+data/xbd/*
+!data/xbd/.gitkeep
+data/osm/*
+!data/osm/.gitkeep
+!data/osm/houston_east_graph.graphml
+data/exports/*
+!data/exports/.gitkeep
+data/models/*
+!data/models/.gitkeep
+!data/models/routing_ppo.zip
+!data/models/unet_resnet18_best.pth
+*.npy
+*.gguf
+*.pt
+*.pth
+!data/models/unet_resnet18_best.pth
+*.png
+!static/images/*.png
+!static/samples/*.png
+!test images/*.png
+!routing/logs/*.png
+
+# OS & Editor files
+.DS_Store
+Thumbs.db
+.vscode/
+.idea/
+
+# Local role documentation & working drafts
+MY POC ROLE/

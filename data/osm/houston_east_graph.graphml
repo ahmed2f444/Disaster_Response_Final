@@ -1,0 +1,531 @@
+<?xml version='1.0' encoding='utf-8'?>
+<graphml xmlns="http://graphml.graphdrawing.org/xmlns" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xsi:schemaLocation="http://graphml.graphdrawing.org/xmlns http://graphml.graphdrawing.org/xmlns/1.0/graphml.xsd"><key id="d19" for="edge" attr.name="geom_json" attr.type="string"/>
+<key id="d18" for="edge" attr.name="hazard_level" attr.type="double"/>
+<key id="d17" for="edge" attr.name="flood_depth_m" attr.type="double"/>
+<key id="d16" for="edge" attr.name="db_edge_id" attr.type="string"/>
+<key id="d15" for="edge" attr.name="edge_id" attr.type="string"/>
+<key id="d14" for="edge" attr.name="osm_path" attr.type="string"/>
+<key id="d13" for="edge" attr.name="highway" attr.type="string"/>
+<key id="d12" for="edge" attr.name="vehicle_restriction" attr.type="string"/>
+<key id="d11" for="edge" attr.name="closure_reported" attr.type="long"/>
+<key id="d10" for="edge" attr.name="closed" attr.type="long"/>
+<key id="d9" for="edge" attr.name="hazard" attr.type="double"/>
+<key id="d8" for="edge" attr.name="capacity" attr.type="double"/>
+<key id="d7" for="edge" attr.name="travel_time_s" attr.type="double"/>
+<key id="d6" for="edge" attr.name="speed_kph" attr.type="double"/>
+<key id="d5" for="edge" attr.name="length_m" attr.type="double"/>
+<key id="d4" for="node" attr.name="osmid" attr.type="string"/>
+<key id="d3" for="node" attr.name="lon" attr.type="double"/>
+<key id="d2" for="node" attr.name="lat" attr.type="double"/>
+<key id="d1" for="graph" attr.name="note" attr.type="string"/>
+<key id="d0" for="graph" attr.name="provenance" attr.type="string"/>
+<graph edgedefault="undirected"><data key="d0">houston_east_db</data>
+<data key="d1">Houston-East xBD road network from db.py</data>
+<node id="n0">
+  <data key="d2">29.83</data>
+  <data key="d3">-95.198</data>
+  <data key="d4">houston_n0</data>
+</node>
+<node id="n1">
+  <data key="d2">29.857</data>
+  <data key="d3">-95.158</data>
+  <data key="d4">houston_n1</data>
+</node>
+<node id="n2">
+  <data key="d2">29.849</data>
+  <data key="d3">-95.095</data>
+  <data key="d4">houston_n2</data>
+</node>
+<node id="n3">
+  <data key="d2">29.798</data>
+  <data key="d3">-95.19</data>
+  <data key="d4">houston_n3</data>
+</node>
+<node id="n4">
+  <data key="d2">29.819</data>
+  <data key="d3">-95.134</data>
+  <data key="d4">houston_n4</data>
+</node>
+<node id="n5">
+  <data key="d2">29.81</data>
+  <data key="d3">-95.078</data>
+  <data key="d4">houston_n5</data>
+</node>
+<node id="n6">
+  <data key="d2">29.769</data>
+  <data key="d3">-95.166</data>
+  <data key="d4">houston_n6</data>
+</node>
+<node id="n7">
+  <data key="d2">29.774</data>
+  <data key="d3">-95.122</data>
+  <data key="d4">houston_n7</data>
+</node>
+<node id="n8">
+  <data key="d2">29.786</data>
+  <data key="d3">-95.084</data>
+  <data key="d4">houston_n8</data>
+</node>
+<node id="n9">
+  <data key="d2">29.827</data>
+  <data key="d3">-95.17</data>
+  <data key="d4">houston_n9</data>
+</node>
+<node id="n10">
+  <data key="d2">29.839</data>
+  <data key="d3">-95.118</data>
+  <data key="d4">houston_n10</data>
+</node>
+<node id="n11">
+  <data key="d2">29.792</data>
+  <data key="d3">-95.152</data>
+  <data key="d4">houston_n11</data>
+</node>
+<node id="n12">
+  <data key="d2">29.798</data>
+  <data key="d3">-95.106</data>
+  <data key="d4">houston_n12</data>
+</node>
+<edge source="n0" target="n1">
+  <data key="d5">1200.0</data>
+  <data key="d6">48.0</data>
+  <data key="d7">90.0</data>
+  <data key="d8">1.0</data>
+  <data key="d9">0.064</data>
+  <data key="d10">0</data>
+  <data key="d11">1</data>
+  <data key="d12">none</data>
+  <data key="d13">primary</data>
+  <data key="d14">E-01</data>
+  <data key="d15">n0-n1</data>
+  <data key="d16">E-01</data>
+  <data key="d17">0.04</data>
+  <data key="d18">0.04</data>
+  <data key="d19">{"type":"LineString","coordinates":[[-95.198,29.83],[-95.19025,29.83956],[-95.181,29.84725],[-95.17025,29.85306],[-95.158,29.857]]}</data>
+</edge>
+<edge source="n0" target="n3">
+  <data key="d5">1200.0</data>
+  <data key="d6">48.0</data>
+  <data key="d7">90.0</data>
+  <data key="d8">1.0</data>
+  <data key="d9">0.08</data>
+  <data key="d10">0</data>
+  <data key="d11">1</data>
+  <data key="d12">none</data>
+  <data key="d13">primary</data>
+  <data key="d14">E-07</data>
+  <data key="d15">n0-n3</data>
+  <data key="d16">E-07</data>
+  <data key="d17">0.05</data>
+  <data key="d18">0.05</data>
+  <data key="d19">{"type":"LineString","coordinates":[[-95.198,29.83],[-95.19938,29.82162],[-95.1985,29.8135],[-95.19538,29.80562],[-95.19,29.798]]}</data>
+</edge>
+<edge source="n0" target="n9">
+  <data key="d5">1200.0</data>
+  <data key="d6">48.0</data>
+  <data key="d7">90.0</data>
+  <data key="d8">1.0</data>
+  <data key="d9">0.064</data>
+  <data key="d10">0</data>
+  <data key="d11">1</data>
+  <data key="d12">none</data>
+  <data key="d13">secondary</data>
+  <data key="d14">E-13</data>
+  <data key="d15">n0-n9</data>
+  <data key="d16">E-13</data>
+  <data key="d17">0.04</data>
+  <data key="d18">0.04</data>
+  <data key="d19">{"type":"LineString","coordinates":[[-95.198,29.83],[-95.18867,29.83056],[-95.17933,29.82956],[-95.17,29.827]]}</data>
+</edge>
+<edge source="n1" target="n2">
+  <data key="d5">1200.0</data>
+  <data key="d6">48.0</data>
+  <data key="d7">90.0</data>
+  <data key="d8">1.0</data>
+  <data key="d9">0.096</data>
+  <data key="d10">0</data>
+  <data key="d11">1</data>
+  <data key="d12">none</data>
+  <data key="d13">primary</data>
+  <data key="d14">E-02</data>
+  <data key="d15">n1-n2</data>
+  <data key="d16">E-02</data>
+  <data key="d17">0.06</data>
+  <data key="d18">0.06</data>
+  <data key="d19">{"type":"LineString","coordinates":[[-95.158,29.857],[-95.14206,29.85762],[-95.12625,29.8565],[-95.11056,29.85363],[-95.095,29.849]]}</data>
+</edge>
+<edge source="n1" target="n4">
+  <data key="d5">1200.0</data>
+  <data key="d6">48.0</data>
+  <data key="d7">90.0</data>
+  <data key="d8">0.5</data>
+  <data key="d9">0.336</data>
+  <data key="d10">0</data>
+  <data key="d11">1</data>
+  <data key="d12">high_clearance_only</data>
+  <data key="d13">primary</data>
+  <data key="d14">E-09</data>
+  <data key="d15">n1-n4</data>
+  <data key="d16">E-09</data>
+  <data key="d17">0.21</data>
+  <data key="d18">0.21</data>
+  <data key="d19">{"type":"LineString","coordinates":[[-95.158,29.857],[-95.14975,29.84825],[-95.143,29.839],[-95.13775,29.82925],[-95.134,29.819]]}</data>
+</edge>
+<edge source="n1" target="n9">
+  <data key="d5">1200.0</data>
+  <data key="d6">48.0</data>
+  <data key="d7">90.0</data>
+  <data key="d8">1.0</data>
+  <data key="d9">0.08</data>
+  <data key="d10">0</data>
+  <data key="d11">1</data>
+  <data key="d12">none</data>
+  <data key="d13">secondary</data>
+  <data key="d14">E-14</data>
+  <data key="d15">n1-n9</data>
+  <data key="d16">E-14</data>
+  <data key="d17">0.05</data>
+  <data key="d18">0.05</data>
+  <data key="d19">{"type":"LineString","coordinates":[[-95.17,29.827],[-95.16778,29.83789],[-95.16378,29.84789],[-95.158,29.857]]}</data>
+</edge>
+<edge source="n1" target="n10">
+  <data key="d5">1200.0</data>
+  <data key="d6">48.0</data>
+  <data key="d7">90.0</data>
+  <data key="d8">1.0</data>
+  <data key="d9">0.096</data>
+  <data key="d10">0</data>
+  <data key="d11">1</data>
+  <data key="d12">none</data>
+  <data key="d13">secondary</data>
+  <data key="d14">E-17</data>
+  <data key="d15">n1-n10</data>
+  <data key="d16">E-17</data>
+  <data key="d17">0.06</data>
+  <data key="d18">0.06</data>
+  <data key="d19">{"type":"LineString","coordinates":[[-95.158,29.857],[-95.14378,29.85056],[-95.13044,29.84456],[-95.118,29.839]]}</data>
+</edge>
+<edge source="n2" target="n5">
+  <data key="d5">1200.0</data>
+  <data key="d6">48.0</data>
+  <data key="d7">90.0</data>
+  <data key="d8">1.0</data>
+  <data key="d9">0.08</data>
+  <data key="d10">0</data>
+  <data key="d11">1</data>
+  <data key="d12">none</data>
+  <data key="d13">primary</data>
+  <data key="d14">E-11</data>
+  <data key="d15">n2-n5</data>
+  <data key="d16">E-11</data>
+  <data key="d17">0.05</data>
+  <data key="d18">0.05</data>
+  <data key="d19">{"type":"LineString","coordinates":[[-95.095,29.849],[-95.08719,29.84019],[-95.08175,29.83075],[-95.07869,29.82069],[-95.078,29.81]]}</data>
+</edge>
+<edge source="n2" target="n10">
+  <data key="d5">1200.0</data>
+  <data key="d6">48.0</data>
+  <data key="d7">90.0</data>
+  <data key="d8">1.0</data>
+  <data key="d9">0.048</data>
+  <data key="d10">0</data>
+  <data key="d11">1</data>
+  <data key="d12">none</data>
+  <data key="d13">secondary</data>
+  <data key="d14">E-18</data>
+  <data key="d15">n10-n2</data>
+  <data key="d16">E-18</data>
+  <data key="d17">0.03</data>
+  <data key="d18">0.03</data>
+  <data key="d19">{"type":"LineString","coordinates":[[-95.118,29.839],[-95.11011,29.84144],[-95.10244,29.84478],[-95.095,29.849]]}</data>
+</edge>
+<edge source="n3" target="n4">
+  <data key="d5">1200.0</data>
+  <data key="d6">48.0</data>
+  <data key="d7">90.0</data>
+  <data key="d8">0.0</data>
+  <data key="d9">0.992</data>
+  <data key="d10">1</data>
+  <data key="d11">0</data>
+  <data key="d12">closed</data>
+  <data key="d13">primary</data>
+  <data key="d14">E-03</data>
+  <data key="d15">n3-n4</data>
+  <data key="d16">E-03</data>
+  <data key="d17">0.62</data>
+  <data key="d18">0.62</data>
+  <data key="d19">{"type":"LineString","coordinates":[[-95.19,29.798],[-95.17675,29.80531],[-95.163,29.81125],[-95.14875,29.81581],[-95.134,29.819]]}</data>
+</edge>
+<edge source="n3" target="n6">
+  <data key="d5">1200.0</data>
+  <data key="d6">48.0</data>
+  <data key="d7">90.0</data>
+  <data key="d8">1.0</data>
+  <data key="d9">0.112</data>
+  <data key="d10">0</data>
+  <data key="d11">1</data>
+  <data key="d12">none</data>
+  <data key="d13">primary</data>
+  <data key="d14">E-08</data>
+  <data key="d15">n3-n6</data>
+  <data key="d16">E-08</data>
+  <data key="d17">0.07</data>
+  <data key="d18">0.07</data>
+  <data key="d19">{"type":"LineString","coordinates":[[-95.19,29.798],[-95.18625,29.78906],[-95.181,29.78125],[-95.17425,29.77456],[-95.166,29.769]]}</data>
+</edge>
+<edge source="n3" target="n9">
+  <data key="d5">1200.0</data>
+  <data key="d6">48.0</data>
+  <data key="d7">90.0</data>
+  <data key="d8">1.0</data>
+  <data key="d9">0.128</data>
+  <data key="d10">0</data>
+  <data key="d11">1</data>
+  <data key="d12">none</data>
+  <data key="d13">secondary</data>
+  <data key="d14">E-15</data>
+  <data key="d15">n3-n9</data>
+  <data key="d16">E-15</data>
+  <data key="d17">0.08</data>
+  <data key="d18">0.08</data>
+  <data key="d19">{"type":"LineString","coordinates":[[-95.17,29.827],[-95.17578,29.81622],[-95.18244,29.80656],[-95.19,29.798]]}</data>
+</edge>
+<edge source="n3" target="n11">
+  <data key="d5">1200.0</data>
+  <data key="d6">48.0</data>
+  <data key="d7">90.0</data>
+  <data key="d8">1.0</data>
+  <data key="d9">0.144</data>
+  <data key="d10">0</data>
+  <data key="d11">1</data>
+  <data key="d12">none</data>
+  <data key="d13">secondary</data>
+  <data key="d14">E-21</data>
+  <data key="d15">n11-n3</data>
+  <data key="d16">E-21</data>
+  <data key="d17">0.09</data>
+  <data key="d18">0.09</data>
+  <data key="d19">{"type":"LineString","coordinates":[[-95.19,29.798],[-95.17733,29.79422],[-95.16467,29.79222],[-95.152,29.792]]}</data>
+</edge>
+<edge source="n4" target="n5">
+  <data key="d5">1200.0</data>
+  <data key="d6">48.0</data>
+  <data key="d7">90.0</data>
+  <data key="d8">0.5</data>
+  <data key="d9">0.384</data>
+  <data key="d10">0</data>
+  <data key="d11">1</data>
+  <data key="d12">high_clearance_only</data>
+  <data key="d13">primary</data>
+  <data key="d14">E-04</data>
+  <data key="d15">n4-n5</data>
+  <data key="d16">E-04</data>
+  <data key="d17">0.24</data>
+  <data key="d18">0.24</data>
+  <data key="d19">{"type":"LineString","coordinates":[[-95.134,29.819],[-95.11925,29.81956],[-95.105,29.81825],[-95.09125,29.81506],[-95.078,29.81]]}</data>
+</edge>
+<edge source="n4" target="n7">
+  <data key="d5">1200.0</data>
+  <data key="d6">48.0</data>
+  <data key="d7">90.0</data>
+  <data key="d8">0.0</data>
+  <data key="d9">0.928</data>
+  <data key="d10">1</data>
+  <data key="d11">0</data>
+  <data key="d12">closed</data>
+  <data key="d13">primary</data>
+  <data key="d14">E-10</data>
+  <data key="d15">n4-n7</data>
+  <data key="d16">E-10</data>
+  <data key="d17">0.58</data>
+  <data key="d18">0.58</data>
+  <data key="d19">{"type":"LineString","coordinates":[[-95.134,29.819],[-95.13438,29.80719],[-95.1325,29.79575],[-95.12838,29.78469],[-95.122,29.774]]}</data>
+</edge>
+<edge source="n4" target="n9">
+  <data key="d5">1200.0</data>
+  <data key="d6">48.0</data>
+  <data key="d7">90.0</data>
+  <data key="d8">0.5</data>
+  <data key="d9">0.304</data>
+  <data key="d10">0</data>
+  <data key="d11">1</data>
+  <data key="d12">high_clearance_only</data>
+  <data key="d13">secondary</data>
+  <data key="d14">E-16</data>
+  <data key="d15">n4-n9</data>
+  <data key="d16">E-16</data>
+  <data key="d17">0.19</data>
+  <data key="d18">0.19</data>
+  <data key="d19">{"type":"LineString","coordinates":[[-95.17,29.827],[-95.15756,29.82567],[-95.14556,29.823],[-95.134,29.819]]}</data>
+</edge>
+<edge source="n5" target="n8">
+  <data key="d5">1200.0</data>
+  <data key="d6">48.0</data>
+  <data key="d7">90.0</data>
+  <data key="d8">1.0</data>
+  <data key="d9">0.192</data>
+  <data key="d10">0</data>
+  <data key="d11">1</data>
+  <data key="d12">none</data>
+  <data key="d13">primary</data>
+  <data key="d14">E-12</data>
+  <data key="d15">n5-n8</data>
+  <data key="d16">E-12</data>
+  <data key="d17">0.12</data>
+  <data key="d18">0.12</data>
+  <data key="d19">{"type":"LineString","coordinates":[[-95.078,29.81],[-95.0765,29.80325],[-95.077,29.797],[-95.0795,29.79125],[-95.084,29.786]]}</data>
+</edge>
+<edge source="n5" target="n10">
+  <data key="d5">1200.0</data>
+  <data key="d6">48.0</data>
+  <data key="d7">90.0</data>
+  <data key="d8">1.0</data>
+  <data key="d9">0.144</data>
+  <data key="d10">0</data>
+  <data key="d11">1</data>
+  <data key="d12">none</data>
+  <data key="d13">secondary</data>
+  <data key="d14">E-19</data>
+  <data key="d15">n10-n5</data>
+  <data key="d16">E-19</data>
+  <data key="d17">0.09</data>
+  <data key="d18">0.09</data>
+  <data key="d19">{"type":"LineString","coordinates":[[-95.118,29.839],[-95.10333,29.83044],[-95.09,29.82078],[-95.078,29.81]]}</data>
+</edge>
+<edge source="n5" target="n12">
+  <data key="d5">1200.0</data>
+  <data key="d6">48.0</data>
+  <data key="d7">90.0</data>
+  <data key="d8">1.0</data>
+  <data key="d9">0.112</data>
+  <data key="d10">0</data>
+  <data key="d11">1</data>
+  <data key="d12">none</data>
+  <data key="d13">secondary</data>
+  <data key="d14">E-24</data>
+  <data key="d15">n12-n5</data>
+  <data key="d16">E-24</data>
+  <data key="d17">0.07</data>
+  <data key="d18">0.07</data>
+  <data key="d19">{"type":"LineString","coordinates":[[-95.078,29.81],[-95.08778,29.80778],[-95.09711,29.80378],[-95.106,29.798]]}</data>
+</edge>
+<edge source="n6" target="n7">
+  <data key="d5">1200.0</data>
+  <data key="d6">48.0</data>
+  <data key="d7">90.0</data>
+  <data key="d8">1.0</data>
+  <data key="d9">0.176</data>
+  <data key="d10">0</data>
+  <data key="d11">1</data>
+  <data key="d12">none</data>
+  <data key="d13">primary</data>
+  <data key="d14">E-05</data>
+  <data key="d15">n6-n7</data>
+  <data key="d16">E-05</data>
+  <data key="d17">0.11</data>
+  <data key="d18">0.11</data>
+  <data key="d19">{"type":"LineString","coordinates":[[-95.166,29.769],[-95.155,29.76781],[-95.144,29.76825],[-95.133,29.77031],[-95.122,29.774]]}</data>
+</edge>
+<edge source="n6" target="n11">
+  <data key="d5">1200.0</data>
+  <data key="d6">48.0</data>
+  <data key="d7">90.0</data>
+  <data key="d8">1.0</data>
+  <data key="d9">0.096</data>
+  <data key="d10">0</data>
+  <data key="d11">1</data>
+  <data key="d12">none</data>
+  <data key="d13">secondary</data>
+  <data key="d14">E-22</data>
+  <data key="d15">n11-n6</data>
+  <data key="d16">E-22</data>
+  <data key="d17">0.06</data>
+  <data key="d18">0.06</data>
+  <data key="d19">{"type":"LineString","coordinates":[[-95.152,29.792],[-95.15533,29.78367],[-95.16,29.776],[-95.166,29.769]]}</data>
+</edge>
+<edge source="n7" target="n8">
+  <data key="d5">1200.0</data>
+  <data key="d6">48.0</data>
+  <data key="d7">90.0</data>
+  <data key="d8">1.0</data>
+  <data key="d9">0.128</data>
+  <data key="d10">0</data>
+  <data key="d11">1</data>
+  <data key="d12">none</data>
+  <data key="d13">primary</data>
+  <data key="d14">E-06</data>
+  <data key="d15">n7-n8</data>
+  <data key="d16">E-06</data>
+  <data key="d17">0.08</data>
+  <data key="d18">0.08</data>
+  <data key="d19">{"type":"LineString","coordinates":[[-95.122,29.774],[-95.11137,29.77475],[-95.1015,29.777],[-95.09238,29.78075],[-95.084,29.786]]}</data>
+</edge>
+<edge source="n7" target="n11">
+  <data key="d5">1200.0</data>
+  <data key="d6">48.0</data>
+  <data key="d7">90.0</data>
+  <data key="d8">0.5</data>
+  <data key="d9">0.352</data>
+  <data key="d10">0</data>
+  <data key="d11">1</data>
+  <data key="d12">high_clearance_only</data>
+  <data key="d13">secondary</data>
+  <data key="d14">E-23</data>
+  <data key="d15">n11-n7</data>
+  <data key="d16">E-23</data>
+  <data key="d17">0.22</data>
+  <data key="d18">0.22</data>
+  <data key="d19">{"type":"LineString","coordinates":[[-95.152,29.792],[-95.14289,29.78511],[-95.13289,29.77911],[-95.122,29.774]]}</data>
+</edge>
+<edge source="n7" target="n12">
+  <data key="d5">1200.0</data>
+  <data key="d6">48.0</data>
+  <data key="d7">90.0</data>
+  <data key="d8">1.0</data>
+  <data key="d9">0.144</data>
+  <data key="d10">0</data>
+  <data key="d11">1</data>
+  <data key="d12">none</data>
+  <data key="d13">secondary</data>
+  <data key="d14">E-25</data>
+  <data key="d15">n12-n7</data>
+  <data key="d16">E-25</data>
+  <data key="d17">0.09</data>
+  <data key="d18">0.09</data>
+  <data key="d19">{"type":"LineString","coordinates":[[-95.106,29.798],[-95.11311,29.79],[-95.11844,29.782],[-95.122,29.774]]}</data>
+</edge>
+<edge source="n8" target="n12">
+  <data key="d5">1200.0</data>
+  <data key="d6">48.0</data>
+  <data key="d7">90.0</data>
+  <data key="d8">1.0</data>
+  <data key="d9">0.08</data>
+  <data key="d10">0</data>
+  <data key="d11">1</data>
+  <data key="d12">none</data>
+  <data key="d13">secondary</data>
+  <data key="d14">E-26</data>
+  <data key="d15">n12-n8</data>
+  <data key="d16">E-26</data>
+  <data key="d17">0.05</data>
+  <data key="d18">0.05</data>
+  <data key="d19">{"type":"LineString","coordinates":[[-95.106,29.798],[-95.09822,29.79311],[-95.09089,29.78911],[-95.084,29.786]]}</data>
+</edge>
+<edge source="n9" target="n11">
+  <data key="d5">1200.0</data>
+  <data key="d6">48.0</data>
+  <data key="d7">90.0</data>
+  <data key="d8">0.0</data>
+  <data key="d9">0.88</data>
+  <data key="d10">1</data>
+  <data key="d11">0</data>
+  <data key="d12">closed</data>
+  <data key="d13">secondary</data>
+  <data key="d14">E-20</data>
+  <data key="d15">n11-n9</data>
+  <data key="d16">E-20</data>
+  <data key="d17">0.55</data>
+  <data key="d18">0.55</data>
+  <data key="d19">{"type":"LineString","coordinates":[[-95.17,29.827],[-95.16267,29.81467],[-95.15667,29.803],[-95.152,29.792]]}</data>
+</edge>
+</graph></graphml>
