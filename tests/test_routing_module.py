@@ -361,6 +361,204 @@ class TestPhase3RoutingFeaturesAndEngine(unittest.TestCase):
         self.assertEqual(tuple(model.observation_space.shape), tuple(env.observation_space.shape))
         self.assertEqual(int(model.action_space.n), 5)
 
+    def test_osm_xml_build_sync_preserve_coords_and_route_fallback(self) -> None:
+        """OSM graphs preserve real coords across DB reload and route without PPO shape crashes."""
+        import tempfile
+        import db
+        import seed
+        from routing.generate import compute_multi_unit_routes, run_counterfactual
+        from routing.graph import build_from_osm, build_graph_from_db, graph_bounds, sync_osm_graph_to_db
+
+        # Non-Houston drivable street network fixture (New Bern, NC) with intermediate curve node
+        osm_xml = """<?xml version="1.0" encoding="UTF-8"?>
+<osm version="0.6" generator="unit-test">
+  <node id="1" lat="35.1060" lon="-77.0500" version="1"/>
+  <node id="2" lat="35.1072" lon="-77.0480" version="1"/>
+  <node id="3" lat="35.1060" lon="-77.0460" version="1"/>
+  <node id="4" lat="35.1090" lon="-77.0500" version="1"/>
+  <node id="5" lat="35.1090" lon="-77.0460" version="1"/>
+  <node id="6" lat="35.1110" lon="-77.0480" version="1"/>
+  <way id="101" version="1">
+    <nd ref="1"/><nd ref="2"/><nd ref="3"/>
+    <tag k="highway" v="residential"/><tag k="name" v="Craven St"/>
+  </way>
+  <way id="102" version="1">
+    <nd ref="1"/><nd ref="4"/>
+    <tag k="highway" v="secondary"/><tag k="name" v="Broad St"/>
+  </way>
+  <way id="103" version="1">
+    <nd ref="4"/><nd ref="5"/>
+    <tag k="highway" v="secondary"/><tag k="name" v="Middle St"/>
+  </way>
+  <way id="104" version="1">
+    <nd ref="5"/><nd ref="3"/>
+    <tag k="highway" v="tertiary"/><tag k="name" v="Pollock St"/>
+  </way>
+  <way id="105" version="1">
+    <nd ref="3"/><nd ref="6"/>
+    <tag k="highway" v="residential"/><tag k="name" v="Union St"/>
+  </way>
+  <way id="106" version="1">
+    <nd ref="6"/><nd ref="4"/>
+    <tag k="highway" v="residential"/><tag k="name" v="East St"/>
+  </way>
+  <way id="107" version="1">
+    <nd ref="5"/><nd ref="1"/>
+    <tag k="highway" v="residential"/><tag k="name" v="Diag St"/>
+  </way>
+</osm>"""
+        with tempfile.TemporaryDirectory() as tmpdir:
+            tmp_path = Path(tmpdir)
+            osm_path = tmp_path / "fixture.osm"
+            osm_path.write_text(osm_xml, encoding="utf-8")
+            db_path = str(tmp_path / "osm_test.db")
+            db.init_db(db_path)
+
+            G = build_from_osm(osm_path, n_nodes=5, mark_hazards=False)
+            self.assertGreaterEqual(G.number_of_nodes(), 4)
+            self.assertGreaterEqual(G.number_of_edges(), 5)
+            # Intermediate shape node '2' on way 101 must yield a curved >=3-point geom_json
+            curved = [
+                d.get("geom_json")
+                for _, _, d in G.edges(data=True)
+                if d.get("geom_json") and len(d["geom_json"].get("coordinates", [])) >= 3
+            ]
+            self.assertTrue(curved, "Expected at least one curved OSM edge geometry")
+            for _, _, d in G.edges(data=True):
+                self.assertEqual(float(d.get("hazard", 0.0)), 0.0)
+                coords = (d.get("geom_json") or {}).get("coordinates", [])
+                self.assertGreaterEqual(len(coords), 2)
+                for lon, lat in coords:
+                    self.assertTrue(-77.06 <= lon <= -77.03, f"Unexpected lon {lon}")
+                    self.assertTrue(35.09 <= lat <= 35.12, f"Unexpected lat {lat}")
+
+            synced_bounds = sync_osm_graph_to_db(osm_path, db_path=db_path, n_nodes=5, mark_hazards=False)
+            self.assertEqual(len(synced_bounds), 4)
+            G_db = build_graph_from_db(db_path=db_path)
+            self.assertEqual(G_db.number_of_nodes(), G.number_of_nodes())
+            min_lon, min_lat, max_lon, max_lat = graph_bounds(G_db)
+            self.assertLess(min_lon, -77.04)
+            self.assertGreater(min_lat, 35.09)
+            self.assertLess(max_lat, 35.12)
+
+            # Node coordinates must NOT be overwritten by seed.NODES (Houston-East)
+            houston_lons = {round(pt[0], 3) for pt in seed.NODES.values()}
+            for _, ndata in G_db.nodes(data=True):
+                self.assertNotIn(round(float(ndata["lon"]), 3), houston_lons)
+
+            # Routing on a 5-node OSM graph (obs_dim != 105) must fall back cleanly without crashing
+            plan = compute_multi_unit_routes(db_path=db_path)
+            unit_routes = plan["routes"]
+            self.assertTrue(unit_routes, "Expected multi-unit routes on non-Houston OSM graph")
+            for r in unit_routes:
+                coords = r["geometry"]["coordinates"]
+                self.assertGreaterEqual(len(coords), 2)
+                for lon, lat in coords:
+                    self.assertTrue(-77.06 <= lon <= -77.03)
+                    self.assertTrue(35.09 <= lat <= 35.12)
+
+            edge_id = db.get_road_edges(db_path=db_path)[0]["edge_id"]
+            cf = run_counterfactual(blocked_edges=[edge_id], db_path=db_path)
+            self.assertIn("routes", cf)
+            self.assertGreaterEqual(len(cf["routes"][0]["geometry"]["coordinates"]), 2)
+
+    def test_osm_upload_endpoint_syncs_osm_graph_into_state(self) -> None:
+        """POST /api/assessment/upload with osm_xml builds OSM roads & routes in /api/state."""
+        import base64
+        import tempfile
+        from unittest import mock
+        from fastapi.testclient import TestClient
+        import damage.assess as assess_mod
+        import db
+        import main
+
+        osm_xml = """<?xml version="1.0" encoding="UTF-8"?>
+<osm version="0.6" generator="unit-test">
+  <node id="1" lat="35.1060" lon="-77.0500" version="1"/>
+  <node id="2" lat="35.1072" lon="-77.0480" version="1"/>
+  <node id="3" lat="35.1060" lon="-77.0460" version="1"/>
+  <node id="4" lat="35.1090" lon="-77.0500" version="1"/>
+  <node id="5" lat="35.1090" lon="-77.0460" version="1"/>
+  <node id="6" lat="35.1110" lon="-77.0480" version="1"/>
+  <way id="101" version="1">
+    <nd ref="1"/><nd ref="2"/><nd ref="3"/>
+    <tag k="highway" v="residential"/><tag k="name" v="Craven St"/>
+  </way>
+  <way id="102" version="1">
+    <nd ref="1"/><nd ref="4"/>
+    <tag k="highway" v="secondary"/><tag k="name" v="Broad St"/>
+  </way>
+  <way id="103" version="1">
+    <nd ref="4"/><nd ref="5"/>
+    <tag k="highway" v="secondary"/><tag k="name" v="Middle St"/>
+  </way>
+  <way id="104" version="1">
+    <nd ref="5"/><nd ref="3"/>
+    <tag k="highway" v="tertiary"/><tag k="name" v="Pollock St"/>
+  </way>
+  <way id="105" version="1">
+    <nd ref="3"/><nd ref="6"/>
+    <tag k="highway" v="residential"/><tag k="name" v="Union St"/>
+  </way>
+  <way id="106" version="1">
+    <nd ref="6"/><nd ref="4"/>
+    <tag k="highway" v="residential"/><tag k="name" v="East St"/>
+  </way>
+  <way id="107" version="1">
+    <nd ref="5"/><nd ref="1"/>
+    <tag k="highway" v="residential"/><tag k="name" v="Diag St"/>
+  </way>
+</osm>"""
+        pre_file = Path(__file__).resolve().parent.parent / "static" / "samples" / "test_fixture_T0_pre_disaster.png"
+        post_file = Path(__file__).resolve().parent.parent / "static" / "samples" / "test_fixture_T1_post_disaster.png"
+        pre_uri = "data:image/png;base64," + base64.b64encode(pre_file.read_bytes()).decode("ascii")
+        post_uri = "data:image/png;base64," + base64.b64encode(post_file.read_bytes()).decode("ascii")
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            tmp_path = Path(tmpdir)
+            db_file = str(tmp_path / "upload_osm.db")
+            export_dir = tmp_path / "exports"
+            export_dir.mkdir(parents=True, exist_ok=True)
+            db.init_db(db_file)
+            client = TestClient(main.app)
+
+            with mock.patch.object(assess_mod, "DEFAULT_EXPORT_DIR", export_dir):
+                resp = client.post(
+                    f"/api/assessment/upload?db_path={db_file}",
+                    json={
+                        "pre_disaster_image": pre_uri,
+                        "post_disaster_image": post_uri,
+                        "sector_id": "new-bern-nc",
+                        "osm_xml": osm_xml,
+                        "use_osm_graph": True,
+                    },
+                )
+            self.assertEqual(resp.status_code, 200, resp.text)
+            state_resp = client.get(f"/api/state?db_path={db_file}")
+            self.assertEqual(state_resp.status_code, 200)
+            state = state_resp.json()
+            roads = state["roads_geojson"]["features"]
+            self.assertTrue(roads)
+            for feat in roads:
+                for lon, lat in feat["geometry"]["coordinates"]:
+                    self.assertTrue(-77.06 <= lon <= -77.03, f"Road lon not OSM: {lon}")
+                    self.assertTrue(35.09 <= lat <= 35.12, f"Road lat not OSM: {lat}")
+            active_plan = state.get("active_plan")
+            self.assertIsNotNone(active_plan, "Expected active_plan after OSM assessment upload")
+            unit_routes = active_plan.get("routes") or []
+            self.assertTrue(unit_routes, "Expected multi-unit routes in active_plan")
+            for u_route in unit_routes:
+                coords = u_route["geometry"]["coordinates"]
+                self.assertGreaterEqual(len(coords), 1)
+                for lon, lat in coords:
+                    self.assertTrue(-77.06 <= lon <= -77.03, f"Route lon not OSM: {lon}")
+                    self.assertTrue(35.09 <= lat <= 35.12, f"Route lat not OSM: {lat}")
+            self.assertTrue(
+                any(len(u["geometry"]["coordinates"]) >= 2 for u in unit_routes),
+                "Expected at least one multi-coordinate OSM route",
+            )
+
+
 
 if __name__ == "__main__":
     unittest.main()

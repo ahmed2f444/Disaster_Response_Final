@@ -134,22 +134,22 @@ def db_id_to_pair(G: nx.Graph, db_eid: str) -> str | None:
 
 
 def _resolve_node_coords(edge_rows: list[dict[str, Any]]) -> dict[int, tuple[float, float]]:
-    """Build `{node_idx: (lon, lat)}` from DB edge geometries with `seed.NODES` fallback."""
+    """Build `{node_idx: (lon, lat)}` from DB edge geometries, falling back to `seed.NODES`."""
     coords: dict[int, tuple[float, float]] = {}
     for row in edge_rows:
         u_idx = int(row["u_node"])
         v_idx = int(row["v_node"])
         geom_pts = (row.get("geometry") or {}).get("coordinates") or []
         if u_idx not in coords:
-            if u_idx in seed.NODES:
-                coords[u_idx] = seed.NODES[u_idx]
-            elif len(geom_pts) >= 2:
+            if len(geom_pts) >= 2:
                 coords[u_idx] = (float(geom_pts[0][0]), float(geom_pts[0][1]))
+            elif u_idx in seed.NODES:
+                coords[u_idx] = seed.NODES[u_idx]
         if v_idx not in coords:
-            if v_idx in seed.NODES:
-                coords[v_idx] = seed.NODES[v_idx]
-            elif len(geom_pts) >= 2:
+            if len(geom_pts) >= 2:
                 coords[v_idx] = (float(geom_pts[-1][0]), float(geom_pts[-1][1]))
+            elif v_idx in seed.NODES:
+                coords[v_idx] = seed.NODES[v_idx]
     return coords
 
 
@@ -430,11 +430,24 @@ def apply_satellite_damage_to_roads(
         return {"OPEN": 0, "HAZARDOUS": 0, "BLOCKED": 0}, False
 
     dmg_weights = {"destroyed": 1.0, "major": 0.70, "minor": 0.28, "no_damage": 0.0}
+    if assessed_buildings is None:
+        assessed_buildings = [
+            b
+            for b in db.get_buildings(db_path=db_path)
+            if str(b.get("data_source", "")) == "resnet18_unet_pretrained"
+        ]
     damaged: list[tuple[float, float, float]] = []
-    for b in assessed_buildings or []:
+    for b in assessed_buildings:
         w = dmg_weights.get(str(b.get("damage_class", "no_damage")).lower(), 0.0)
         if w > 0.0:
             damaged.append((float(b.get("centroid_lat", 0.0)), float(b.get("centroid_lon", 0.0)), w))
+
+    is_osm_graph = any(str(r.get("edge_id", "")).startswith("OSM-") for r in rows)
+    if is_osm_graph:
+        avg_len = sum(float(r.get("length_m", 300.0)) for r in rows) / max(1, len(rows))
+        prox_radius_m = max(65.0, min(1800.0, avg_len * 0.35))
+    else:
+        prox_radius_m = 1800.0
 
     counts = {"OPEN": 0, "HAZARDOUS": 0, "BLOCKED": 0}
     changed = False
@@ -448,10 +461,16 @@ def apply_satellite_damage_to_roads(
 
         score = 0.0
         if damaged and coords:
+            hits: list[float] = []
             for b_lat, b_lon, weight in damaged:
                 min_d = min(haversine_m(b_lat, b_lon, float(pt[1]), float(pt[0])) for pt in coords)
-                if min_d < 1800.0:
-                    score += weight * (1.0 - min_d / 1800.0)
+                if min_d < prox_radius_m:
+                    hits.append(weight * (1.0 - min_d / prox_radius_m))
+            if is_osm_graph:
+                hits.sort(reverse=True)
+                score = sum(hits[:3]) / 2.5
+            else:
+                score = sum(hits)
 
         sat_debris = round(min(0.75, score * 0.45), 3)
         old_debris = round(float(row.get("debris_score", 0.0)), 3)
@@ -651,41 +670,108 @@ def _hw(x: Any) -> str:
     return x[0] if isinstance(x, list) else (x or "unclassified")
 
 
-def build_from_osm(source: Any, n_nodes: int = N_NODES, seed_val: int = 7) -> nx.Graph:
-    """Reduce the drivable OpenStreetMap network to `n_nodes` intersections."""
+def _subsample_coords(coords: list[list[float]], max_points: int = 20) -> list[list[float]]:
+    """Keep endpoints and evenly sample intermediate LineString coordinates."""
+    if len(coords) <= max_points:
+        return coords
+    idxs = [int(round(i * (len(coords) - 1) / (max_points - 1))) for i in range(max_points)]
+    deduped: list[int] = []
+    for idx in idxs:
+        if not deduped or deduped[-1] != idx:
+            deduped.append(idx)
+    if deduped[-1] != len(coords) - 1:
+        deduped[-1] = len(coords) - 1
+    return [coords[i] for i in deduped]
+
+
+def graph_bounds(G: nx.Graph) -> tuple[float, float, float, float]:
+    """Return `(min_lon, min_lat, max_lon, max_lat)` across all nodes in `G`."""
+    lons = [float(d["lon"]) for _, d in G.nodes(data=True)]
+    lats = [float(d["lat"]) for _, d in G.nodes(data=True)]
+    if not lons or not lats:
+        raise ValueError("Graph contains no node coordinates")
+    return (min(lons), min(lats), max(lons), max(lats))
+
+
+def build_from_osm(
+    source: Any,
+    n_nodes: int = N_NODES,
+    seed_val: int = 7,
+    mark_hazards: bool = True,
+) -> nx.Graph:
+    """Reduce a drivable OpenStreetMap network to at most `n_nodes` intersections."""
     import osmnx as ox  # lazy import so offline edge deployments do not require osmnx
+    import tempfile
 
-    if isinstance(source, (tuple, list)) and len(source) == 4:
-        n, s, e, w = source
-        M = ox.graph_from_bbox((w, s, e, n), network_type="drive")
-    elif isinstance(source, (str, Path)) and Path(str(source)).suffix == ".osm":
-        M = ox.graph_from_xml(str(source), simplify=True)
+    tmp_osm_path: Path | None = None
+    try:
+        if isinstance(source, (tuple, list)) and len(source) == 4:
+            n, s, e, w = (float(x) for x in source)
+            M = ox.graph_from_bbox((w, s, e, n), network_type="drive")
+        elif isinstance(source, str) and "<osm" in source[:256]:
+            with tempfile.NamedTemporaryFile("w", suffix=".osm", encoding="utf-8", delete=False) as tf:
+                tf.write(source)
+                tmp_osm_path = Path(tf.name)
+            M = ox.graph_from_xml(str(tmp_osm_path), simplify=True)
+        elif isinstance(source, (str, Path)) and Path(str(source)).suffix.lower() in {".osm", ".xml"}:
+            M = ox.graph_from_xml(str(source), simplify=True)
+        else:
+            M = ox.graph_from_place(str(source), network_type="drive")
+    finally:
+        if tmp_osm_path is not None and tmp_osm_path.exists():
+            tmp_osm_path.unlink(missing_ok=True)
+
+    if M.number_of_nodes() < 2:
+        raise ValueError(f"OSM area has only {M.number_of_nodes()} drivable nodes; need at least 2")
+
+    M_strong = ox.truncate.largest_component(M, strongly=True)
+    if M_strong.number_of_nodes() >= min(4, n_nodes, M.number_of_nodes()):
+        M = M_strong
     else:
-        M = ox.graph_from_place(str(source), network_type="drive")
+        M = ox.truncate.largest_component(M, strongly=False)
 
-    M = ox.truncate.largest_component(M, strongly=True)
     U = nx.Graph()
+    for node, d in M.nodes(data=True):
+        U.add_node(node, lat=float(d["y"]), lon=float(d["x"]))
+
     for u, v, d in M.edges(data=True):
         if u == v:
             continue
-        if U.has_edge(u, v) and U[u][v]["length"] <= d["length"]:
+        length_m = float(d.get("length", 1.0) or 1.0)
+        if U.has_edge(u, v) and U[u][v]["length"] <= length_m:
             continue
+        geom_obj = d.get("geometry")
+        if geom_obj is not None and hasattr(geom_obj, "coords"):
+            raw_pts = [[round(float(x), 6), round(float(y), 6)] for x, y in geom_obj.coords]
+        else:
+            raw_pts = [
+                [round(float(M.nodes[u]["x"]), 6), round(float(M.nodes[u]["y"]), 6)],
+                [round(float(M.nodes[v]["x"]), 6), round(float(M.nodes[v]["y"]), 6)],
+            ]
+        u_lon, u_lat = float(M.nodes[u]["x"]), float(M.nodes[u]["y"])
+        if raw_pts and haversine_m(u_lat, u_lon, raw_pts[-1][1], raw_pts[-1][0]) < haversine_m(
+            u_lat, u_lon, raw_pts[0][1], raw_pts[0][0]
+        ):
+            raw_pts = list(reversed(raw_pts))
         U.add_edge(
             u,
             v,
-            length=float(d["length"]),
+            length=length_m,
             highway=_hw(d.get("highway")),
             maxspeed=d.get("maxspeed"),
             lanes=d.get("lanes"),
+            u_ref=u,
+            coords=raw_pts,
         )
-    for node, d in M.nodes(data=True):
-        if node in U:
-            U.nodes[node].update(lat=d["y"], lon=d["x"])
-    if U.number_of_nodes() < n_nodes:
-        raise ValueError(f"OSM area has only {U.number_of_nodes()} nodes, need {n_nodes}")
 
+    isolated = [n for n in list(U.nodes) if U.degree(n) == 0]
+    U.remove_nodes_from(isolated)
+    if U.number_of_nodes() < 2:
+        raise ValueError(f"OSM network has only {U.number_of_nodes()} connected nodes; need at least 2")
+
+    target_nodes = max(2, min(int(n_nodes), U.number_of_nodes()))
     cand = [x for x in U if U.degree(x) >= 3]
-    if len(cand) < n_nodes:
+    if len(cand) < target_nodes:
         cand = list(U.nodes)
 
     def dist(a: Any, b: Any) -> float:
@@ -696,7 +782,7 @@ def build_from_osm(source: Any, n_nodes: int = N_NODES, seed_val: int = 7) -> nx
     lon_c = sum(U.nodes[x]["lon"] for x in cand) / len(cand)
     first = min(cand, key=lambda x: haversine_m(U.nodes[x]["lat"], U.nodes[x]["lon"], lat_c, lon_c))
     chosen = [first]
-    while len(chosen) < n_nodes:
+    while len(chosen) < target_nodes:
         nxt = max(
             (x for x in cand if x not in chosen),
             key=lambda x: (min(dist(x, c) for c in chosen), rng.random()),
@@ -709,6 +795,8 @@ def build_from_osm(source: Any, n_nodes: int = N_NODES, seed_val: int = 7) -> nx
     for i, a in enumerate(chosen):
         lengths, pth = nx.single_source_dijkstra(U, a, weight="length")
         for b in chosen[i + 1 :]:
+            if b not in pth:
+                continue
             p = pth[b]
             if any(x in chosen_set for x in p[1:-1]):
                 continue
@@ -725,8 +813,19 @@ def build_from_osm(source: Any, n_nodes: int = N_NODES, seed_val: int = 7) -> nx
         hw = longest["highway"]
         speeds = [_num(s["maxspeed"], _SPEED.get(s["highway"], 35)) for s in segs]
         t = sum(s["length"] / (sp / 3.6) for s, sp in zip(segs, speeds))
-        speed = length / t * 3.6
+        speed = length / t * 3.6 if t > 0 else 35.0
         lanes = min(_num(s["lanes"], 1) for s in segs)
+        stitched: list[list[float]] = []
+        for seg_idx in range(len(p) - 1):
+            x = p[seg_idx]
+            y = p[seg_idx + 1]
+            seg = U[x][y]
+            seg_pts = list(seg["coords"]) if seg["u_ref"] == x else list(reversed(seg["coords"]))
+            if not stitched:
+                stitched.extend(seg_pts)
+            else:
+                stitched.extend(seg_pts[1:] if seg_pts and seg_pts[0] == stitched[-1] else seg_pts)
+        coords = _subsample_coords(stitched, max_points=20)
         G.add_edge(
             name[a],
             name[b],
@@ -739,6 +838,7 @@ def build_from_osm(source: Any, n_nodes: int = N_NODES, seed_val: int = 7) -> nx
             vehicle_restriction="none",
             highway=hw,
             osm_path="|".join(str(x) for x in p),
+            geom_json={"type": "LineString", "coordinates": coords},
         )
 
     for a in chosen:
@@ -758,8 +858,62 @@ def build_from_osm(source: Any, n_nodes: int = N_NODES, seed_val: int = 7) -> nx
         add(*best[1])
 
     _finish_edge_attrs(G)
-    _mark_hazards(G, rng)
+    if mark_hazards:
+        _mark_hazards(G, rng)
     return G
+
+
+def sync_osm_graph_to_db(
+    source: Any,
+    db_path: str = db.DEFAULT_DB_PATH,
+    n_nodes: int = N_NODES,
+    mark_hazards: bool = False,
+) -> tuple[float, float, float, float]:
+    """Build an OSM road graph and persist it to `road_edges`, returning `(min_lon, min_lat, max_lon, max_lat)`."""
+    G = build_from_osm(source, n_nodes=n_nodes, mark_hazards=mark_hazards)
+    edge_rows: list[dict[str, Any]] = []
+    for idx, (u, v, d) in enumerate(sorted(G.edges(data=True), key=lambda item: edge_id(item[0], item[1])), start=1):
+        u_idx = int(G.nodes[u]["node_index"])
+        v_idx = int(G.nodes[v]["node_index"])
+        u_pt = [round(float(G.nodes[u]["lon"]), 6), round(float(G.nodes[u]["lat"]), 6)]
+        v_pt = [round(float(G.nodes[v]["lon"]), 6), round(float(G.nodes[v]["lat"]), 6)]
+        raw_geom = d.get("geom_json") or {"type": "LineString", "coordinates": [u_pt, v_pt]}
+        coords = list(raw_geom.get("coordinates") or [u_pt, v_pt])
+        if len(coords) >= 2:
+            d_first_u = haversine_m(u_pt[1], u_pt[0], float(coords[0][1]), float(coords[0][0]))
+            d_last_u = haversine_m(u_pt[1], u_pt[0], float(coords[-1][1]), float(coords[-1][0]))
+            if d_last_u < d_first_u:
+                coords.reverse()
+        closed = bool(int(d.get("closed", 0)))
+        hazard = round(float(d.get("hazard", 0.0)), 3)
+        if closed:
+            cap = 0.0
+            status = "BLOCKED"
+        elif hazard >= DB_HAZARD_THRESHOLD:
+            cap = 0.5
+            status = "HAZARDOUS"
+        else:
+            cap = 1.0
+            status = "OPEN"
+        edge_rows.append(
+            {
+                "edge_id": f"OSM-{idx:02d}",
+                "u_node": u_idx,
+                "v_node": v_idx,
+                "geometry": {"type": "LineString", "coordinates": coords},
+                "length_m": round(float(d.get("length_m", 1200.0)), 2),
+                "base_travel_sec": round(float(d.get("travel_time_s", 90.0)), 2),
+                "flood_depth_m": hazard if hazard > 0.0 else 0.0,
+                "debris_score": 0.0,
+                "closure_state": closed,
+                "hazard_level": hazard,
+                "capacity": cap,
+                "vehicle_restriction": str(d.get("vehicle_restriction", "none") or "none"),
+                "edge_status": status,
+            }
+        )
+    db.replace_road_edges(edge_rows, db_path=db_path)
+    return graph_bounds(G)
 
 
 def main() -> None:

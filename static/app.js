@@ -139,8 +139,49 @@ let selectedPostTileName = null;
 let selectedPreTileDataUrl = null;
 let selectedPostTileDataUrl = null;
 let pendingTileReads = { pre: null, post: null };
+let selectedOsmXmlText = "";
+let selectedOsmFileName = "";
 let currentInspectedBuildingData = null;
 let toastTimer = null;
+
+function isOsmActiveSector(roadsGeoJson) {
+  const feats = (roadsGeoJson && roadsGeoJson.features) || [];
+  if (feats.length === 0) return false;
+  return feats.some((f) => {
+    const eid = String((f && f.properties && f.properties.edge_id) || "");
+    if (eid.startsWith("OSM-")) return true;
+    const coords = (f && f.geometry && f.geometry.coordinates) || [];
+    if (coords.length === 0) return false;
+    const [lon, lat] = coords[0];
+    return lon < -95.25 || lon > -95.02 || lat < 29.72 || lat > 29.90;
+  });
+}
+
+function computeGeoBoundsLatLng(roadsGeoJson, activePlan = null) {
+  let minLat = Infinity;
+  let maxLat = -Infinity;
+  let minLon = Infinity;
+  let maxLon = -Infinity;
+  const absorb = (lat, lon) => {
+    if (!Number.isFinite(lat) || !Number.isFinite(lon)) return;
+    if (lat < minLat) minLat = lat;
+    if (lat > maxLat) maxLat = lat;
+    if (lon < minLon) minLon = lon;
+    if (lon > maxLon) maxLon = lon;
+  };
+  ((roadsGeoJson && roadsGeoJson.features) || []).forEach((f) => {
+    ((f && f.geometry && f.geometry.coordinates) || []).forEach((pt) => absorb(Number(pt[1]), Number(pt[0])));
+  });
+  const units = (activePlan && activePlan.routes) || [];
+  units.forEach((u) => {
+    (u.masked_path || []).forEach((pt) => absorb(Number(pt.lat), Number(pt.lon)));
+  });
+  if (!Number.isFinite(minLat)) return null;
+  return [
+    [minLat, minLon],
+    [maxLat, maxLon],
+  ];
+}
 
 // Toast Notification Helper
 function showToast(msg, isError = false) {
@@ -248,6 +289,9 @@ class TacticalLeafletMap {
     };
 
     this._activeSatelliteKey = null;
+    this._lastWasOsm = false;
+    this._lastSectorSig = null;
+    this._activeSectorBounds = SECTOR_BOUNDS;
     this.floodPolygon = null;
     this.floodBankNorth = null;
     this.floodBankSouth = null;
@@ -357,12 +401,19 @@ class TacticalLeafletMap {
 
   setViewportPreset(mode, activeDronePos = null) {
     cameraMode = mode;
+    const baseBounds = this._lastWasOsm && this._activeSectorBounds ? this._activeSectorBounds : SECTOR_BOUNDS;
+    const topBounds = this._lastWasOsm && this._activeSectorBounds ? this._activeSectorBounds : OPERATIONAL_GRID_BOUNDS;
     if (mode === "iso") {
-      this.map.fitBounds(SECTOR_BOUNDS, { ...SECTOR_OVERVIEW_PADDING, animate: true });
+      this.map.fitBounds(baseBounds, { ...SECTOR_OVERVIEW_PADDING, animate: true });
     } else if (mode === "top") {
-      this.map.fitBounds(OPERATIONAL_GRID_BOUNDS, { ...SECTOR_OVERVIEW_PADDING, animate: true });
+      this.map.fitBounds(topBounds, { ...SECTOR_OVERVIEW_PADDING, animate: true });
     } else if (mode === "bridge") {
-      this.map.setView([29.819, -95.134], 15, { animate: true });
+      if (this._lastWasOsm && this._activeSectorBounds) {
+        const [[s, w], [n, e]] = this._activeSectorBounds;
+        this.map.setView([(s + n) / 2, (w + e) / 2], 15, { animate: true });
+      } else {
+        this.map.setView([29.819, -95.134], 15, { animate: true });
+      }
     } else if (mode === "drone") {
       const target = activeDronePos || [29.792, -95.100];
       this.map.setView(target, 14, { animate: true });
@@ -457,6 +508,38 @@ class TacticalLeafletMap {
 
   renderState(stateData, overridePlan = null) {
     if (!this.builder || !stateData) return;
+    const activePlan = overridePlan || stateData.active_plan || null;
+    const osmMode = isOsmActiveSector(stateData.roads_geojson);
+    if (osmMode) {
+      this.layers.water.clearLayers();
+      this.layers.secondaryRoads.clearLayers();
+      this.floodPolygon = null;
+      this.floodBankNorth = null;
+      this.floodBankSouth = null;
+      const computed = computeGeoBoundsLatLng(stateData.roads_geojson, activePlan);
+      if (computed) {
+        this._activeSectorBounds = computed;
+        const sig = JSON.stringify(computed);
+        if (this._lastSectorSig !== sig || !this._lastWasOsm) {
+          this._lastSectorSig = sig;
+          this.map.fitBounds(computed, SECTOR_OVERVIEW_PADDING);
+        }
+      }
+    } else {
+      if (this.layers.water.getLayers().length === 0) {
+        this.buildFloodChannel();
+      }
+      if (this.layers.secondaryRoads.getLayers().length === 0) {
+        this.buildSecondaryStreetGrid();
+      }
+      if (this._lastWasOsm) {
+        this._activeSectorBounds = SECTOR_BOUNDS;
+        this._lastSectorSig = null;
+        this.map.fitBounds(SECTOR_BOUNDS, SECTOR_OVERVIEW_PADDING);
+      }
+    }
+    this._lastWasOsm = osmMode;
+
     const encoded = new TextEncoder().encode(
       JSON.stringify({
         buildings_geojson: stateData.buildings_geojson || {},
@@ -469,10 +552,10 @@ class TacticalLeafletMap {
     this.builder.clear();
     this.builder.buildBuildings(stateData.buildings_geojson);
     this.builder.buildRoads(stateData.roads_geojson, overridePlan ? buildWhatIfHazardMap(overridePlan) : null);
-    this.builder.buildNodes();
+    this.builder.buildNodes(stateData.roads_geojson);
     this.builder.buildIncidents(stateData.incidents);
-    this.builder.buildFleetUnits();
-    this.builder.buildTwoLineRoutes(overridePlan || stateData.active_plan || null);
+    this.builder.buildFleetUnits(activePlan, stateData.roads_geojson);
+    this.builder.buildTwoLineRoutes(activePlan);
     const renderMs = performance.now() - t0;
 
     this._updatePerfChips(renderMs, geoBytes, stateData);
@@ -696,8 +779,48 @@ class SectorMapBuilder {
     });
   }
 
-  buildNodes() {
+  buildNodes(roadsGeoJson = null) {
     this.mc.layers.labels.clearLayers();
+    if (isOsmActiveSector(roadsGeoJson)) {
+      const osmNodes = {};
+      ((roadsGeoJson && roadsGeoJson.features) || []).forEach((f) => {
+        const coords = (f && f.geometry && f.geometry.coordinates) || [];
+        const props = (f && f.properties) || {};
+        if (coords.length < 2) return;
+        const uIdx = props.u_node;
+        const vIdx = props.v_node;
+        if (uIdx !== undefined && uIdx !== null && !(uIdx in osmNodes)) {
+          osmNodes[uIdx] = { lat: Number(coords[0][1]), lon: Number(coords[0][0]) };
+        }
+        if (vIdx !== undefined && vIdx !== null && !(vIdx in osmNodes)) {
+          osmNodes[vIdx] = { lat: Number(coords[coords.length - 1][1]), lon: Number(coords[coords.length - 1][0]) };
+        }
+      });
+      Object.entries(osmNodes).forEach(([idx, pt]) => {
+        const color = Number(idx) === 0 ? "#00e5ff" : "#94a3b8";
+        L.circleMarker([pt.lat, pt.lon], {
+          renderer: this.mc.canvasRenderer,
+          radius: Number(idx) === 0 ? 7 : 5,
+          color,
+          weight: 2,
+          fillColor: "#0b1322",
+          fillOpacity: 0.95,
+          interactive: false,
+        }).addTo(this.mc.layers.labels);
+
+        L.marker([pt.lat, pt.lon], {
+          interactive: false,
+          icon: L.divIcon({
+            className: "",
+            html: `<div class="tactical-node-pill" style="border-color:${color};">N${escapeHtml(String(idx))}</div>`,
+            iconSize: [28, 16],
+            iconAnchor: [14, -6],
+          }),
+        }).addTo(this.mc.layers.labels);
+      });
+      return;
+    }
+
     Object.entries(NODE_META).forEach(([, meta]) => {
       const isJunction = meta.type === "JUNCTION";
       const color = meta.type === "DEPOT"
@@ -808,7 +931,7 @@ class SectorMapBuilder {
       if (ppoPath.length > 1) {
         ppoPath.forEach(pt => rawLatLngs.push([pt.lat, pt.lon]));
       } else if (safeLatLngs.length > 1) {
-        rawLatLngs.push(safeLatLngs[0], [29.819, -95.134], safeLatLngs[safeLatLngs.length - 1]);
+        safeLatLngs.forEach(pt => rawLatLngs.push(pt));
       }
 
       if (rawLatLngs.length > 1) {
@@ -824,7 +947,7 @@ class SectorMapBuilder {
     });
   }
 
-  buildFleetUnits() {
+  buildFleetUnits(activePlan = null, roadsGeoJson = null) {
     this.mc.layers.fleet.clearLayers();
     this.fleetUnits = {};
     const defaults = {
@@ -832,9 +955,29 @@ class SectorMapBuilder {
       "TRN-01": [29.830, -95.198],
       "RSC-01": [29.849, -95.095],
     };
+    const osmMode = isOsmActiveSector(roadsGeoJson);
+    const routeStartByUnit = {};
+    if (activePlan && Array.isArray(activePlan.routes)) {
+      activePlan.routes.forEach((u) => {
+        if (u && u.unit_id && Array.isArray(u.masked_path) && u.masked_path.length > 0) {
+          routeStartByUnit[u.unit_id] = [Number(u.masked_path[0].lat), Number(u.masked_path[0].lon)];
+        }
+      });
+    }
+    const roadFallbackPts = [];
+    if (osmMode && roadsGeoJson && Array.isArray(roadsGeoJson.features)) {
+      roadsGeoJson.features.forEach((f) => {
+        const c = (f && f.geometry && f.geometry.coordinates) || [];
+        if (c.length > 0) roadFallbackPts.push([Number(c[0][1]), Number(c[0][0])]);
+      });
+    }
 
     Object.entries(UNIT_CONFIG).forEach(([unitId, cfg], idx) => {
-      const pos = defaults[unitId] || [29.815, -95.125];
+      const pos =
+        routeStartByUnit[unitId] ||
+        (osmMode && roadFallbackPts.length > 0 ? roadFallbackPts[idx % roadFallbackPts.length] : null) ||
+        defaults[unitId] ||
+        [29.815, -95.125];
       const dot = L.circleMarker(pos, {
         renderer: this.mc.canvasRenderer,
         radius: 6.5,
@@ -878,7 +1021,10 @@ class SectorMapBuilder {
       const unitObj = this.fleetUnits[unit.unit_id];
       if (!unitObj) return;
 
-      const pts = buildContinuousEdgeLatLngs(unit.edge_ids || [], roadsMap);
+      let pts = buildContinuousEdgeLatLngs(unit.edge_ids || [], roadsMap);
+      if (pts.length < 2 && Array.isArray(unit.masked_path) && unit.masked_path.length >= 2) {
+        pts = unit.masked_path.map((pt) => [Number(pt.lat), Number(pt.lon)]);
+      }
       if (pts.length < 2) return;
 
       unitObj.progress = (unitObj.progress + unitObj.config.speed * dtSec) % 1.0;
@@ -1112,6 +1258,18 @@ async function resetBaseline() {
   currentFloodDelta = 0.0;
   document.getElementById("floodSlider").value = 0.0;
   whatIfPlan = null;
+  selectedOsmXmlText = "";
+  selectedOsmFileName = "";
+  const osmChk = document.getElementById("useOsmGraphCheckbox");
+  const osmPlaceEl = document.getElementById("osmPlaceInput");
+  const osmBboxEl = document.getElementById("osmBboxInput");
+  const osmFileEl = document.getElementById("osmFileInput");
+  const osmStatusEl = document.getElementById("osmFileStatus");
+  if (osmChk) osmChk.checked = false;
+  if (osmPlaceEl) osmPlaceEl.value = "";
+  if (osmBboxEl) osmBboxEl.value = "";
+  if (osmFileEl) osmFileEl.value = "";
+  if (osmStatusEl) osmStatusEl.textContent = "No .osm file loaded";
   updateSurgeGauge(0.0);
   updateClosuresUI();
 
@@ -1997,28 +2155,60 @@ async function triggerDamageAssessment() {
     return;
   }
 
+  const osmChk = document.getElementById("useOsmGraphCheckbox");
+  const osmPlaceEl = document.getElementById("osmPlaceInput");
+  const osmBboxEl = document.getElementById("osmBboxInput");
+  const osmPlaceVal = osmPlaceEl ? osmPlaceEl.value.trim() : "";
+  const osmBboxRaw = osmBboxEl ? osmBboxEl.value.trim() : "";
+  let parsedBounds = null;
+  if (osmBboxRaw) {
+    const parts = osmBboxRaw.split(",").map((s) => Number(s.trim()));
+    if (
+      parts.length !== 4 ||
+      parts.some((n) => !Number.isFinite(n)) ||
+      parts[0] >= parts[2] ||
+      parts[1] >= parts[3]
+    ) {
+      showToast("Invalid WGS84 BBox. Expected: minLon,minLat,maxLon,maxLat (with min < max).", true);
+      return;
+    }
+    parsedBounds = parts;
+  }
+  const useOsmGraph = Boolean((osmChk && osmChk.checked) || osmPlaceVal || selectedOsmXmlText || parsedBounds);
+  const resolvedSectorId = osmPlaceVal
+    ? osmPlaceVal.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "") || "osm-sector"
+    : "houston-east";
+
   btn.disabled = true;
   progressWrap.style.display = "block";
   resultsCard.style.display = "none";
   bar.style.width = "25%";
   pctText.textContent = "RUNNING";
-  stepText.textContent = selectedPreTileDataUrl
-    ? "Uploading T0/T1 pair & running ResNet-18 U-Net + Grad-CAM..."
-    : "Querying POST /api/assessment/upload & polling Portion 1 status...";
+  stepText.textContent = useOsmGraph
+    ? "Building OSM road graph, running ResNet-18 U-Net & recalculating routes..."
+    : (selectedPreTileDataUrl
+      ? "Uploading T0/T1 pair & running ResNet-18 U-Net + Grad-CAM..."
+      : "Querying POST /api/assessment/upload & polling Portion 1 status...");
 
   const apiBase = getApiBase();
   try {
     // Call Endpoint 3: POST /api/assessment/upload (Portion 1 Ammar)
+    const uploadPayload = {
+      pre_disaster_image: selectedPreTileDataUrl,
+      post_disaster_image: selectedPostTileDataUrl,
+      pre_tile_ref: selectedPreTileName || "xbd_houston_east_pre.tif",
+      post_tile_ref: selectedPostTileName || "xbd_houston_east_post.tif",
+      sector_id: resolvedSectorId,
+      use_osm_graph: useOsmGraph,
+    };
+    if (parsedBounds) uploadPayload.bounds = parsedBounds;
+    if (osmPlaceVal) uploadPayload.osm_place = osmPlaceVal;
+    if (selectedOsmXmlText) uploadPayload.osm_xml = selectedOsmXmlText;
+
     const res = await fetch(`${apiBase}/api/assessment/upload`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        pre_disaster_image: selectedPreTileDataUrl,
-        post_disaster_image: selectedPostTileDataUrl,
-        pre_tile_ref: selectedPreTileName || "xbd_houston_east_pre.tif",
-        post_tile_ref: selectedPostTileName || "xbd_houston_east_post.tif",
-        sector_id: "houston-east",
-      }),
+      body: JSON.stringify(uploadPayload),
     });
     if (!res.ok) {
       let detail = `HTTP ${res.status}`;
@@ -2977,6 +3167,39 @@ function wireProjectGuidanceControls() {
   const p4Overlay = document.getElementById("portion4MonitorModal");
   p4Overlay?.addEventListener("click", (evt) => {
     if (evt.target === p4Overlay) closePortion4MonitorModal();
+  });
+
+  const btnOsmSelect = document.getElementById("btnOsmFileSelect");
+  const osmFileInput = document.getElementById("osmFileInput");
+  const osmFileStatus = document.getElementById("osmFileStatus");
+  const useOsmChk = document.getElementById("useOsmGraphCheckbox");
+  const osmPlaceInput = document.getElementById("osmPlaceInput");
+  const osmBboxInput = document.getElementById("osmBboxInput");
+
+  btnOsmSelect?.addEventListener("click", () => osmFileInput?.click());
+  osmFileInput?.addEventListener("change", () => {
+    const file = osmFileInput.files && osmFileInput.files[0];
+    if (!file) {
+      selectedOsmXmlText = "";
+      selectedOsmFileName = "";
+      if (osmFileStatus) osmFileStatus.textContent = "No .osm file loaded";
+      return;
+    }
+    const reader = new FileReader();
+    reader.onload = () => {
+      selectedOsmXmlText = typeof reader.result === "string" ? reader.result : "";
+      selectedOsmFileName = file.name;
+      if (osmFileStatus) osmFileStatus.textContent = `Loaded: ${file.name}`;
+      if (useOsmChk && selectedOsmXmlText) useOsmChk.checked = true;
+    };
+    reader.onerror = () => showToast(`Failed reading ${file.name}`, true);
+    reader.readAsText(file);
+  });
+
+  [osmPlaceInput, osmBboxInput].forEach((el) => {
+    el?.addEventListener("input", () => {
+      if (useOsmChk && el.value.trim()) useOsmChk.checked = true;
+    });
   });
 }
 

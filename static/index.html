@@ -543,6 +543,25 @@
           </div>
         </div>
 
+        <div style="margin-top:14px; padding-top:14px; border-top:1px solid var(--border-subtle); display:grid; gap:10px;">
+          <label style="display:inline-flex; align-items:center; gap:8px; font-size:11.5px; color:var(--text-bright); cursor:pointer;">
+            <input type="checkbox" id="useOsmGraphCheckbox" style="accent-color:#00e5ff; width:14px; height:14px;">
+            <span><strong>Use OpenStreetMap Road Graph</strong> (<code>routing/graph.py:build_from_osm</code> — replace roads &amp; MARL routes from uploaded map area)</span>
+          </label>
+          <div style="display:grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap:10px;">
+            <input type="text" id="osmPlaceInput" placeholder="OSM Place (e.g. Jacksonville, NC) — optional" style="background:#070d18; border:1px solid var(--border-medium); color:var(--text-bright); border-radius:6px; padding:8px 10px; font-size:11.5px; font-family:var(--font-mono);">
+            <input type="text" id="osmBboxInput" placeholder="WGS84 BBox: minLon,minLat,maxLon,maxLat — optional" style="background:#070d18; border:1px solid var(--border-medium); color:var(--text-bright); border-radius:6px; padding:8px 10px; font-size:11.5px; font-family:var(--font-mono);">
+            <div style="display:flex; align-items:center; gap:8px;">
+              <button type="button" class="btn btn-secondary" id="btnOsmFileSelect" style="padding:7px 12px; font-size:11px; white-space:nowrap;">UPLOAD .OSM XML</button>
+              <span id="osmFileStatus" style="font-size:11px; color:var(--text-dim); font-family:var(--font-mono); overflow:hidden; text-overflow:ellipsis; white-space:nowrap;">No .osm file loaded</span>
+              <input type="file" id="osmFileInput" accept=".osm,.xml" style="display:none;">
+            </div>
+          </div>
+          <div style="font-size:10.5px; color:var(--text-dim);">
+            Plain PNG tiles have no embedded GPS tags. Provide OSM Place, WGS84 BBox, an offline <code>.osm</code> XML extract, or GeoTIFF imagery with CRS tags to route on real OSM roads.
+          </div>
+        </div>
+
         <div id="assessmentProgressWrap" style="display:none; margin-top:16px;">
           <div style="display:flex; justify-content:space-between; font-size:11px; font-family:var(--font-mono); margin-bottom:6px;">
             <span id="assessmentStepText" style="color:var(--accent-cyan);">Running Bi-Temporal ResNet-18 U-Net &amp; Grad-CAM...</span>

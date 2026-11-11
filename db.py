@@ -871,8 +871,8 @@ def update_building_label(
 
 # --- 1B. Road Edge Helpers (Portion 2 Negm & Consumers) ---
 
-def insert_road_edge(edge: dict[str, Any], db_path: str = DEFAULT_DB_PATH) -> None:
-    """Insert or replace a road segment in road_edges without raw SQL."""
+def _normalize_road_edge_params(edge: dict[str, Any]) -> tuple[Any, ...]:
+    """Normalize an edge dictionary into parameter values for road_edges writes."""
     geom_str = (
         json.dumps(edge["geometry"])
         if isinstance(edge.get("geometry"), dict)
@@ -897,6 +897,26 @@ def insert_road_edge(edge: dict[str, Any], db_path: str = DEFAULT_DB_PATH) -> No
         if raw_status
         else derive_road_display_state(closure_default, hazard_val, capacity_val, restriction_val).upper()
     )
+    return (
+        str(edge["edge_id"]),
+        int(edge["u_node"]),
+        int(edge["v_node"]),
+        geom_str,
+        float(edge.get("length_m", 1200.0)),
+        float(edge.get("base_travel_sec", 90.0)),
+        flood_depth,
+        debris_score,
+        1 if closure_default else 0,
+        hazard_val,
+        capacity_val,
+        restriction_val,
+        status_str,
+    )
+
+
+def insert_road_edge(edge: dict[str, Any], db_path: str = DEFAULT_DB_PATH) -> None:
+    """Insert or replace a road segment in road_edges without raw SQL."""
+    params = _normalize_road_edge_params(edge)
     with get_connection(db_path) as conn:
         _ensure_road_edge_columns(conn)
         conn.execute(
@@ -907,23 +927,31 @@ def insert_road_edge(edge: dict[str, Any], db_path: str = DEFAULT_DB_PATH) -> No
                 closure_state, hazard_level, capacity, vehicle_restriction, edge_status
             ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
-            (
-                str(edge["edge_id"]),
-                int(edge["u_node"]),
-                int(edge["v_node"]),
-                geom_str,
-                float(edge.get("length_m", 1200.0)),
-                float(edge.get("base_travel_sec", 90.0)),
-                flood_depth,
-                debris_score,
-                1 if closure_default else 0,
-                hazard_val,
-                capacity_val,
-                restriction_val,
-                status_str,
-            ),
+            params,
         )
         conn.commit()
+
+
+def replace_road_edges(edges: list[dict[str, Any]], db_path: str = DEFAULT_DB_PATH) -> int:
+    """Atomically replace all rows in road_edges with a new sector/OSM road graph."""
+    if not edges:
+        raise ValueError("replace_road_edges requires a non-empty list of edges")
+    params_list = [_normalize_road_edge_params(edge) for edge in edges]
+    with get_connection(db_path) as conn:
+        _ensure_road_edge_columns(conn)
+        conn.execute("DELETE FROM road_edges")
+        conn.executemany(
+            """
+            INSERT OR REPLACE INTO road_edges (
+                edge_id, u_node, v_node, geom_geojson,
+                length_m, base_travel_sec, flood_depth_m, debris_score,
+                closure_state, hazard_level, capacity, vehicle_restriction, edge_status
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            params_list,
+        )
+        conn.commit()
+    return len(params_list)
 
 
 def get_road_edges(status: str | None = None, db_path: str = DEFAULT_DB_PATH) -> list[dict[str, Any]]:

@@ -136,6 +136,47 @@ def _node_path_to_geometry(G: nx.Graph, node_path: list[str]) -> tuple[list[list
     return coords, edge_ids
 
 
+def _node_location(G: nx.Graph, node_idx: int) -> dict[str, float]:
+    """Return `{'lat': ..., 'lon': ...}` for `n<node_idx>` on `G`, falling back to `seed.NODES`."""
+    n_key = f"n{int(node_idx)}"
+    if n_key in G.nodes:
+        return {"lat": float(G.nodes[n_key]["lat"]), "lon": float(G.nodes[n_key]["lon"])}
+    if G.number_of_nodes() > 0:
+        first_node = next(iter(sorted(G.nodes)))
+        return {"lat": float(G.nodes[first_node]["lat"]), "lon": float(G.nodes[first_node]["lon"])}
+    pt = seed.NODES[int(node_idx)]
+    return {"lat": float(pt[1]), "lon": float(pt[0])}
+
+
+def _fleet_units_for_graph(G: nx.Graph) -> list[dict[str, Any]]:
+    """Bind fleet unit origins and fallback targets to valid nodes in `G`."""
+    ordered = sorted(G.nodes, key=lambda n: int(G.nodes[n].get("node_index", 0)))
+    if not ordered:
+        return [dict(u, location=dict(u["location"])) for u in DEFAULT_FLEET_UNITS]
+    node_indices = [int(G.nodes[n].get("node_index", i)) for i, n in enumerate(ordered)]
+    n_cnt = len(node_indices)
+    is_osm = any(str(d.get("db_edge_id", "")).startswith("OSM-") for _, _, d in G.edges(data=True))
+    units: list[dict[str, Any]] = []
+    for idx, tmpl in enumerate(DEFAULT_FLEET_UNITS):
+        orig = int(tmpl["origin_node"])
+        if is_osm or f"n{orig}" not in G.nodes:
+            orig = node_indices[idx % n_cnt]
+        tgt = int(tmpl["default_target_node"])
+        if is_osm or f"n{tgt}" not in G.nodes:
+            tgt = node_indices[(idx + max(1, n_cnt // 2)) % n_cnt]
+            if tgt == orig and n_cnt > 1:
+                tgt = node_indices[(node_indices.index(orig) + 1) % n_cnt]
+        units.append(
+            {
+                **tmpl,
+                "origin_node": orig,
+                "default_target_node": tgt,
+                "location": _node_location(G, orig),
+            }
+        )
+    return units
+
+
 def _coords_to_latlon(coords: list[list[float]]) -> list[dict[str, float]]:
     return [{"lat": float(c[1]), "lon": float(c[0])} for c in coords]
 
@@ -170,10 +211,42 @@ class RoutingEngine:
             for e, s in state.items()
         }
 
+    def _shortest_visible_proposal(
+        self,
+        start: str,
+        target: str,
+        active_state: dict[str, dict[str, Any]],
+        vis: dict[str, int],
+    ) -> list[str]:
+        """Compute shortest-time path using only reported-open edges (for non-13-node OSM graphs)."""
+        V = nx.Graph()
+        V.add_nodes_from(self.G.nodes(data=True))
+        for u, v, d in self.G.edges(data=True):
+            pid = edge_id(u, v)
+            if vis.get(pid, 0) == 1:
+                continue
+            s = active_state.get(pid, {})
+            hazard = float(s.get("hazard", d.get("hazard", 0.0)))
+            travel = float(s.get("travel_time_s", d.get("travel_time_s", 60.0)))
+            V.add_edge(u, v, w=max(1e-3, travel) * (1.0 + 0.5 * max(0.0, hazard)))
+        if start not in V or target not in V:
+            return [start]
+        try:
+            return list(nx.shortest_path(V, start, target, weight="w"))
+        except (nx.NetworkXNoPath, nx.NodeNotFound):
+            return [start]
+
     def propose(self, start: str, target: str, state: dict[str, dict[str, Any]] | None = None) -> list[str]:
-        """Greedy PPO rollout on `state` using only reported closures."""
+        """Greedy PPO rollout on `state` using reported closures, with shape-safe OSM fallback."""
         active_state = state if state is not None else self.state
         vis = self._visible(active_state)
+        obs_shape = tuple(getattr(self.model.observation_space, "shape", ()) or ())
+        expected_obs = int(obs_shape[0]) if obs_shape else -1
+        expected_act = int(getattr(self.model.action_space, "n", 0) or 0)
+        is_osm = any(str(s.get("db_edge_id", "")).startswith("OSM-") for s in active_state.values())
+        if is_osm or self.ix.obs_dim != expected_obs or self.ix.max_deg > expected_act:
+            return self._shortest_visible_proposal(start, target, active_state, vis)
+
         cur, path = start, [start]
         for step in range(self.max_steps):
             if cur == target:
@@ -270,9 +343,9 @@ def _get_cached_engine(db_path: str) -> RoutingEngine:
     from .train import MODEL_PATH
 
     G = build_graph_from_db(db_path=db_path)
-    graph_sig = tuple(
-        sorted(f"{u}-{v}:{round(float(d.get('travel_time_s', 0.0)), 2)}" for u, v, d in G.edges(data=True))
-    )
+    edge_sig = sorted(f"{u}-{v}:{round(float(d.get('travel_time_s', 0.0)), 2)}" for u, v, d in G.edges(data=True))
+    node_sig = sorted(f"{n}:{round(float(d.get('lat', 0.0)), 5)},{round(float(d.get('lon', 0.0)), 5)}" for n, d in G.nodes(data=True))
+    graph_sig = tuple(edge_sig + node_sig)
     key = (graph_sig, str(Path(MODEL_PATH).resolve()))
     with _ENGINE_CACHE_LOCK:
         cached = _ENGINE_CACHE.get(key)
@@ -288,15 +361,30 @@ def _assign_units_to_incidents(
     units: list[dict[str, Any]],
     incidents: list[dict[str, Any]],
 ) -> list[tuple[dict[str, Any], dict[str, Any]]]:
-    """Assign each fleet unit to its highest-priority matching incident."""
+    """Assign each fleet unit to its highest-priority matching in-sector incident."""
     active = [i for i in incidents if str(i.get("status", "open")).lower() != "resolved"]
+    if active and G.number_of_nodes() > 0:
+        lats = [float(d["lat"]) for _, d in G.nodes(data=True)]
+        lons = [float(d["lon"]) for _, d in G.nodes(data=True)]
+        lat_c = sum(lats) / len(lats)
+        lon_c = sum(lons) / len(lons)
+        radius_m = max(
+            [haversine_m(lat_c, lon_c, float(d["lat"]), float(d["lon"])) for _, d in G.nodes(data=True)] or [0.0]
+        )
+        sector_limit_m = max(50_000.0, 4.0 * radius_m)
+        in_sector = [
+            inc
+            for inc in active
+            if haversine_m(lat_c, lon_c, float(inc["location"]["lat"]), float(inc["location"]["lon"])) <= sector_limit_m
+        ]
+        active = in_sector
     if not active:
         return [
             (
                 u,
                 {
                     "incident_id": f"INC-FALLBACK-{idx}",
-                    "location": {"lat": seed.NODES[u["default_target_node"]][1], "lon": seed.NODES[u["default_target_node"]][0]},
+                    "location": _node_location(G, int(u["default_target_node"])),
                     "severity": "high",
                     "required_capability": u["capability"],
                     "status": "open",
@@ -319,6 +407,15 @@ def _assign_units_to_incidents(
     used_inc_ids: set[str] = set()
     for unit in units:
         pool = [i for i in ordered if i["incident_id"] not in used_inc_ids] or ordered
+        origin_key = f"n{int(unit['origin_node'])}" if unit.get("origin_node") is not None else None
+        if origin_key:
+            non_self = [
+                inc
+                for inc in pool
+                if nearest_node(G, float(inc["location"]["lat"]), float(inc["location"]["lon"])) != origin_key
+            ]
+            if non_self:
+                pool = non_self
         best = max(
             pool,
             key=lambda inc: (
@@ -386,7 +483,7 @@ def compute_multi_unit_routes(db_path: str = db.DEFAULT_DB_PATH) -> dict[str, An
     t0 = time.perf_counter()
     state = state_from_db(db_path=db_path)
     incidents = db.get_incidents(db_path=db_path)
-    assignments = _assign_units_to_incidents(eng.G, DEFAULT_FLEET_UNITS, incidents)
+    assignments = _assign_units_to_incidents(eng.G, _fleet_units_for_graph(eng.G), incidents)
 
     unit_routes = [eng.route_unit(unit, inc, state) for unit, inc in assignments]
     total_eta = round(sum(float(u["eta_sec"]) for u in unit_routes if u["reachable"]), 1)
@@ -458,7 +555,7 @@ def run_counterfactual(
     )
 
     incidents = db.get_incidents(db_path=db_path)
-    assignments = _assign_units_to_incidents(eng.G, DEFAULT_FLEET_UNITS, incidents)
+    assignments = _assign_units_to_incidents(eng.G, _fleet_units_for_graph(eng.G), incidents)
     unit_routes = [eng.route_unit(unit, inc, overlay_state) for unit, inc in assignments]
     whatif_eta = round(sum(float(u["eta_sec"]) for u in unit_routes if u["reachable"]), 1)
 

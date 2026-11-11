@@ -296,6 +296,9 @@ class UploadAssessmentRequest(BaseModel):
     sector_id: str = Field(default="houston-east", description="Target geographical sector")
     bounds: Optional[List[float]] = Field(default=None, min_length=4, max_length=4, description="Optional [min_lon, min_lat, max_lon, max_lat] WGS84 bbox")
     footprints: Optional[List[dict[str, Any]]] = Field(default=None, description="Optional pre-supplied building footprint polygons")
+    osm_place: Optional[str] = Field(default=None, description="Optional OpenStreetMap place/city query for road graph generation")
+    osm_xml: Optional[str] = Field(default=None, description="Optional raw .osm XML document for offline OpenStreetMap road graph generation")
+    use_osm_graph: bool = Field(default=False, description="Build road graph via OpenStreetMap (osm_xml, osm_place, or WGS84 bounds)")
 
 
 class UploadAssessmentResponse(BaseModel):

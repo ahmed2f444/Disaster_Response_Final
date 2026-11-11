@@ -475,6 +475,8 @@ def run_vision_assessment(
         "pair_digest": pair_digest,
         "road_changed": road_changed,
         "incident_changed": incident_changed,
+        "bounds": [float(v) for v in active_bounds],
+        "geotiff_bounds": [float(v) for v in geotiff_bounds] if geotiff_bounds else None,
         "embedding_ref": embedding_ref,
         "duration_sec": elapsed,
         "message": (

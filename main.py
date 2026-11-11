@@ -639,6 +639,28 @@ async def upload_satellite_imagery(
     now_ts = int(datetime.now(timezone.utc).timestamp())
     task_id = f"TASK_ASSESS_{now_ts}_{uuid.uuid4().hex[:6]}"
 
+    osm_source: Any = None
+    if payload.osm_xml and payload.osm_xml.strip():
+        osm_source = payload.osm_xml.strip()
+    elif payload.osm_place and payload.osm_place.strip():
+        osm_source = payload.osm_place.strip()
+    elif payload.use_osm_graph and payload.bounds and len(payload.bounds) == 4:
+        min_lon, min_lat, max_lon, max_lat = (float(v) for v in payload.bounds)
+        osm_source = (max_lat, min_lat, max_lon, min_lon)
+
+    osm_synced = False
+    effective_bounds = payload.bounds
+    if osm_source is not None:
+        sync_osm_fn = _load_plugin_callable("routing.graph", "sync_osm_graph_to_db")
+        if sync_osm_fn is not None:
+            try:
+                osm_bounds = sync_osm_fn(osm_source, db_path=resolved_db, mark_hazards=False)
+                osm_synced = True
+                if not effective_bounds:
+                    effective_bounds = [float(v) for v in osm_bounds]
+            except Exception as exc:
+                raise HTTPException(status_code=400, detail=f"Failed to build OSM road graph: {exc}") from exc
+
     assess_fn = _load_plugin_callable("damage.assess", "run_vision_assessment")
     assess_status = "pending"
     progress_pct = 0.0
@@ -647,6 +669,7 @@ async def upload_satellite_imagery(
         f"Bi-temporal satellite imagery queued for sector {payload.sector_id}. "
         "Awaiting Portion 1 vision assessment module (damage/assess.py)."
     )
+    assess_res: Any = None
     if assess_fn is not None:
         assess_res = _invoke_plugin(
             assess_fn,
@@ -658,7 +681,7 @@ async def upload_satellite_imagery(
             post_disaster_image=payload.post_disaster_image,
             pre_tile_ref=payload.pre_tile_ref,
             post_tile_ref=payload.post_tile_ref,
-            bounds=payload.bounds,
+            bounds=effective_bounds,
             footprints=payload.footprints,
         )
         if isinstance(assess_res, dict):
@@ -676,6 +699,22 @@ async def upload_satellite_imagery(
             progress_pct = 100.0
             assess_msg = f"Bi-temporal satellite imagery processed for sector {payload.sector_id}."
 
+    if not osm_synced and payload.use_osm_graph and isinstance(assess_res, dict):
+        geo_bounds = assess_res.get("geotiff_bounds")
+        sync_osm_fn = _load_plugin_callable("routing.graph", "sync_osm_graph_to_db")
+        if geo_bounds and len(geo_bounds) == 4 and sync_osm_fn is not None:
+            min_lon, min_lat, max_lon, max_lat = (float(v) for v in geo_bounds)
+            try:
+                sync_osm_fn((max_lat, min_lat, max_lon, min_lon), db_path=resolved_db, mark_hazards=False)
+                osm_synced = True
+                apply_fn = _load_plugin_callable("routing.graph", "apply_satellite_damage_to_roads")
+                if apply_fn is not None:
+                    apply_fn(db_path=resolved_db)
+            except Exception as exc:
+                raise HTTPException(status_code=400, detail=f"Failed to build OSM road graph: {exc}") from exc
+        elif assess_status == "completed":
+            assess_msg += " OSM road graph skipped (PNG lacks GeoTIFF CRS coordinates; specify OSM Place, BBox, or .osm XML)."
+
     with _ASSESSMENT_TASKS_LOCK:
         _ASSESSMENT_TASKS[task_id] = {
             "status": assess_status,
@@ -686,7 +725,7 @@ async def upload_satellite_imagery(
     append_audit_event(
         actor_role="OPERATOR",
         event_type="ASSESSMENT_TRIGGERED",
-        payload={"task_id": task_id, "sector_id": payload.sector_id, "status": assess_status},
+        payload={"task_id": task_id, "sector_id": payload.sector_id, "status": assess_status, "osm_synced": osm_synced},
         db_path=resolved_db,
     )
 
@@ -694,6 +733,7 @@ async def upload_satellite_imagery(
         compute_fn = _load_plugin_callable("routing.generate", "compute_multi_unit_routes")
         if compute_fn is not None:
             road_changed = bool(assess_res.get("road_changed")) if isinstance(assess_res, dict) else False
+            road_changed = road_changed or osm_synced
             inc_changed = bool(assess_res.get("incident_changed")) if isinstance(assess_res, dict) else False
             existing_routes = get_routes(include_counterfactuals=False, db_path=resolved_db)
             has_p2 = any(str(r.get("route_id", "")).startswith("PLAN-P2-") for r in existing_routes)
@@ -704,6 +744,7 @@ async def upload_satellite_imagery(
                     actor_role="PORTION2:SAT_DISPATCH",
                     extra_payload={
                         "task_id": task_id,
+                        "osm_synced": osm_synced,
                         "pair_digest": assess_res.get("pair_digest", "") if isinstance(assess_res, dict) else "",
                     },
                 )
